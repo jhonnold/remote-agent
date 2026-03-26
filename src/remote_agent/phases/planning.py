@@ -1,0 +1,74 @@
+# src/remote_agent/phases/planning.py
+from __future__ import annotations
+import logging
+from pathlib import Path
+
+from remote_agent.models import Issue, Event, PhaseResult
+from remote_agent.db import Database
+from remote_agent.github import GitHubService
+from remote_agent.agent import AgentService
+from remote_agent.workspace import WorkspaceManager
+
+logger = logging.getLogger(__name__)
+
+
+class PlanningHandler:
+    def __init__(self, db: Database, github: GitHubService,
+                 agent_service: AgentService, workspace_mgr: WorkspaceManager):
+        self.db = db
+        self.github = github
+        self.agent_service = agent_service
+        self.workspace_mgr = workspace_mgr
+
+    async def handle(self, issue: Issue, event: Event) -> PhaseResult:
+        workspace = await self.workspace_mgr.ensure_workspace(
+            issue.repo_owner, issue.repo_name, issue.issue_number,
+        )
+        await self.db.update_issue_workspace(issue.id, workspace)
+
+        branch = issue.branch_name or f"agent/issue-{issue.issue_number}"
+        await self.workspace_mgr.ensure_branch(workspace, branch)
+        await self.db.update_issue_branch(issue.id, branch)
+
+        # Read existing plan if revision
+        existing_plan = None
+        plan_path = Path(workspace) / "docs" / "plans" / f"issue-{issue.issue_number}-plan.md"
+        if plan_path.exists():
+            existing_plan = plan_path.read_text()
+
+        feedback = event.payload.get("body") if event.event_type in ("revision_requested", "new_comment") else None
+
+        await self.agent_service.run_planning(
+            issue_number=issue.issue_number,
+            issue_title=issue.title,
+            issue_body=issue.body or "",
+            cwd=workspace,
+            issue_id=issue.id,
+            existing_plan=existing_plan,
+            feedback=feedback,
+        )
+
+        commit_msg = "docs: plan for issue #{}".format(issue.issue_number)
+        if existing_plan:
+            commit_msg = "docs: revise plan for issue #{}".format(issue.issue_number)
+        await self.workspace_mgr.commit_and_push(workspace, branch, commit_msg)
+
+        plan_commit = await self.workspace_mgr.get_head_commit(workspace)
+        await self.db.set_plan_commit_hash(issue.id, plan_commit)
+
+        pr_number = issue.pr_number
+        if not pr_number:
+            pr_number = await self.github.create_pr(
+                issue.repo_owner, issue.repo_name,
+                title=f"[Agent] Plan for: {issue.title}",
+                body=f"Plan for #{issue.issue_number}. Review the plan file and comment with feedback.",
+                branch=branch, draft=True,
+            )
+            await self.db.update_issue_pr(issue.id, pr_number)
+
+        await self.github.post_comment(
+            issue.repo_owner, issue.repo_name, pr_number,
+            "Plan created/updated. Please review the plan file and comment with your feedback.",
+        )
+
+        return PhaseResult(next_phase="plan_review")
