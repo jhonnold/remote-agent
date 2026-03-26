@@ -814,7 +814,6 @@ class Database:
         except Exception:
             await self._conn.rollback()
             raise
-        await self._conn.commit()
 
     async def get_unprocessed_events(self) -> list[Event]:
         cursor = await self._conn.execute(
