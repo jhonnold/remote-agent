@@ -1,0 +1,93 @@
+# tests/test_dispatcher.py
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from remote_agent.dispatcher import Dispatcher
+from remote_agent.models import Issue, Event, PhaseResult
+from remote_agent.config import AgentConfig
+
+
+@pytest.fixture
+def mock_config():
+    config = MagicMock()
+    config.agent = AgentConfig(daily_budget_usd=50.0)
+    return config
+
+
+@pytest.fixture
+def deps():
+    return {
+        "db": AsyncMock(),
+        "github": AsyncMock(),
+        "agent_service": AsyncMock(),
+        "workspace_mgr": AsyncMock(),
+    }
+
+
+@pytest.fixture
+def dispatcher(mock_config, deps):
+    return Dispatcher(mock_config, deps["db"], deps["github"],
+                      deps["agent_service"], deps["workspace_mgr"])
+
+
+async def test_routes_new_issue_to_planning(dispatcher, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
+                  title="T", body="", phase="new")
+    event = Event(id=1, issue_id=1, event_type="new_issue", payload={})
+    deps["db"].get_unprocessed_events.return_value = [event]
+    deps["db"].get_issue_by_id.return_value = issue
+    deps["db"].get_daily_spend.return_value = 0.0
+
+    # Mock the planning handler
+    with patch.object(dispatcher, "_get_handler") as mock_handler:
+        handler = AsyncMock()
+        handler.handle.return_value = PhaseResult(next_phase="plan_review")
+        mock_handler.return_value = handler
+        await dispatcher.process_events()
+
+    deps["db"].update_issue_phase.assert_called_once_with(1, "plan_review")
+    deps["db"].mark_event_processed.assert_called_once_with(1)
+
+
+async def test_budget_exceeded_leaves_event_unprocessed(dispatcher, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
+                  title="T", body="", phase="new")
+    event = Event(id=1, issue_id=1, event_type="new_issue", payload={})
+    deps["db"].get_unprocessed_events.return_value = [event]
+    deps["db"].get_issue_by_id.return_value = issue
+    deps["db"].get_daily_spend.return_value = 100.0  # Over budget
+
+    await dispatcher.process_events()
+
+    deps["db"].mark_event_processed.assert_not_called()
+    deps["github"].post_comment.assert_called_once()  # Budget notification
+    deps["db"].set_budget_notified.assert_called_once()
+
+
+async def test_handler_error_transitions_to_error(dispatcher, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
+                  title="T", body="", phase="new")
+    event = Event(id=1, issue_id=1, event_type="new_issue", payload={})
+    deps["db"].get_unprocessed_events.return_value = [event]
+    deps["db"].get_issue_by_id.return_value = issue
+    deps["db"].get_daily_spend.return_value = 0.0
+
+    with patch.object(dispatcher, "_get_handler") as mock_handler:
+        handler = AsyncMock()
+        handler.handle.side_effect = Exception("Agent crashed")
+        mock_handler.return_value = handler
+        await dispatcher.process_events()
+
+    deps["db"].update_issue_phase.assert_called_with(1, "error")
+    deps["db"].mark_event_processed.assert_called_once()
+
+
+async def test_recover_interrupted_issues(dispatcher, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
+                  title="T", body="", phase="planning")
+    deps["db"].get_active_issues.return_value = [issue]
+    deps["db"].get_unprocessed_events.return_value = []  # No events pending
+
+    await dispatcher.recover_interrupted_issues()
+
+    deps["db"].update_issue_phase.assert_called_once_with(1, "error")
+    deps["db"].update_issue_error.assert_called_once()
