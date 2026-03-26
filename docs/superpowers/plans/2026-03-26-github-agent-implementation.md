@@ -559,14 +559,17 @@ async def test_update_issue_phase(db):
     assert issue.phase == "planning"
 
 
-async def test_get_issues_in_review(db):
+async def test_get_issues_awaiting_comment(db):
     id1 = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
     id2 = await db.create_issue("o", "r", {"number": 2, "title": "T2", "body": ""})
+    id3 = await db.create_issue("o", "r", {"number": 3, "title": "T3", "body": ""})
     await db.update_issue_phase(id1, "plan_review")
     await db.update_issue_phase(id2, "implementing")
-    review_issues = await db.get_issues_in_review("o", "r")
-    assert len(review_issues) == 1
-    assert review_issues[0].issue_number == 1
+    await db.update_issue_phase(id3, "error")
+    review_issues = await db.get_issues_awaiting_comment("o", "r")
+    assert len(review_issues) == 2  # plan_review + error
+    phases = {i.phase for i in review_issues}
+    assert phases == {"plan_review", "error"}
 
 
 async def test_create_and_complete_agent_run(db):
@@ -704,9 +707,9 @@ class Database:
         row = await cursor.fetchone()
         return self._row_to_issue(row) if row else None
 
-    async def get_issues_in_review(self, repo_owner: str, repo_name: str) -> list[Issue]:
+    async def get_issues_awaiting_comment(self, repo_owner: str, repo_name: str) -> list[Issue]:
         cursor = await self._conn.execute(
-            "SELECT * FROM issues WHERE repo_owner = ? AND repo_name = ? AND phase IN ('plan_review', 'code_review')",
+            "SELECT * FROM issues WHERE repo_owner = ? AND repo_name = ? AND phase IN ('plan_review', 'code_review', 'error')",
             (repo_owner, repo_name),
         )
         rows = await cursor.fetchall()
@@ -795,7 +798,8 @@ class Database:
         """Create events for multiple comments in a single transaction with last_comment_id update."""
         if not comments:
             return
-        async with self._conn.execute("BEGIN"):
+        await self._conn.execute("BEGIN")
+        try:
             for comment in comments:
                 await self._conn.execute(
                     "INSERT INTO events (issue_id, event_type, payload) VALUES (?, ?, ?)",
@@ -806,6 +810,10 @@ class Database:
                 "UPDATE issues SET last_comment_id = ?, updated_at = datetime('now') WHERE id = ?",
                 (max_id, issue_id),
             )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
         await self._conn.commit()
 
     async def get_unprocessed_events(self) -> list[Event]:
@@ -2127,9 +2135,13 @@ class Poller:
                 if issue_id:
                     await self.db.create_event(issue_id, "new_issue", issue_data)
                     logger.info("New issue detected: %s/%s#%d", owner, name, issue_data["number"])
+            elif existing.phase in ("completed", "error"):
+                # Issue reappeared with label after being completed/errored - reopen
+                await self.db.create_event(existing.id, "reopen", issue_data)
+                logger.info("Reopened issue: %s/%s#%d", owner, name, issue_data["number"])
 
-        # 2. Check for new PR comments on issues in review phases
-        review_issues = await self.db.get_issues_in_review(owner, name)
+        # 2. Check for new PR comments on issues in review or error phases
+        review_issues = await self.db.get_issues_awaiting_comment(owner, name)
         for issue in review_issues:
             if not issue.pr_number:
                 continue
