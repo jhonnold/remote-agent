@@ -254,7 +254,7 @@ For each unprocessed event:
 | `code_review` | `new_comment` | Run `code_review` handler |
 | `error` | `new_comment` | Interpret comment; if retry, route to `planning` or `implementing` |
 | Any | `revision_requested` | Run the target phase handler (phase encoded in event payload) |
-| Any | `reopen` | Run `planning` handler |
+| Any | `reopen` | Reset `plan_approved`, run `planning` handler |
 
 ### Key decisions
 - The dispatcher is a simple router. It does not interpret comments or make complex decisions.
@@ -517,7 +517,7 @@ async def main():
 [project]
 name = "remote-agent"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk>=0.1.50",
     "aiosqlite>=0.20.0",
