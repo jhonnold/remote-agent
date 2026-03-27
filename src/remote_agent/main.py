@@ -11,6 +11,7 @@ from remote_agent.workspace import WorkspaceManager
 from remote_agent.agent import AgentService
 from remote_agent.poller import Poller
 from remote_agent.dispatcher import Dispatcher
+from remote_agent.audit import AuditLogger
 
 logger = logging.getLogger("remote_agent")
 
@@ -21,19 +22,21 @@ class App:
     db: Database
     poller: Poller
     dispatcher: Dispatcher
+    audit: AuditLogger | None = None
 
 
 async def create_app(config_path: str = "config.yaml") -> App:
     config = load_config(config_path)
 
     db = await Database.initialize(config.database.path)
+    audit = AuditLogger(db, config.logging.audit_file)
     github = GitHubService()
     workspace_mgr = WorkspaceManager(config, github)
     agent_service = AgentService(config, db)
     poller = Poller(config, db, github)
-    dispatcher = Dispatcher(config, db, github, agent_service, workspace_mgr)
+    dispatcher = Dispatcher(config, db, github, agent_service, workspace_mgr, audit=audit)
 
-    return App(config=config, db=db, poller=poller, dispatcher=dispatcher)
+    return App(config=config, db=db, poller=poller, dispatcher=dispatcher, audit=audit)
 
 
 async def run(config_path: str = "config.yaml"):
@@ -60,6 +63,8 @@ async def run(config_path: str = "config.yaml"):
                 logger.exception("Unexpected error in main loop")
             await asyncio.sleep(app.config.polling.interval_seconds)
     finally:
+        if app.audit:
+            app.audit.close()
         await app.db.close()
 
 

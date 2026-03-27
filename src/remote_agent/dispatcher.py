@@ -1,6 +1,10 @@
 # src/remote_agent/dispatcher.py
 from __future__ import annotations
+import asyncio
+import contextvars
 import logging
+
+from remote_agent.logging_config import current_issue_id, current_event_id
 
 from remote_agent.config import Config
 from remote_agent.db import Database
@@ -18,10 +22,12 @@ logger = logging.getLogger(__name__)
 
 class Dispatcher:
     def __init__(self, config: Config, db: Database, github: GitHubService,
-                 agent_service: AgentService, workspace_mgr: WorkspaceManager):
+                 agent_service: AgentService, workspace_mgr: WorkspaceManager,
+                 audit=None):
         self.config = config
         self.db = db
         self.github = github
+        self.audit = audit
         self._planning = PlanningHandler(db, github, agent_service, workspace_mgr)
         self._plan_review = PlanReviewHandler(db, github, agent_service)
         self._implementation = ImplementationHandler(db, github, agent_service, workspace_mgr)
@@ -29,19 +35,29 @@ class Dispatcher:
 
     async def process_events(self):
         events = await self.db.get_unprocessed_events()
+        logger.debug("Fetched %d events to process", len(events))
         for event in events:
-            await self._process_event(event)
+            ctx = contextvars.copy_context()
+            ctx.run(current_issue_id.set, event.issue_id)
+            ctx.run(current_event_id.set, event.id)
+            await asyncio.create_task(
+                self._process_event(event), context=ctx
+            )
 
     async def recover_interrupted_issues(self):
         active = await self.db.get_active_issues()
         events = await self.db.get_unprocessed_events()
         active_with_events = {e.issue_id for e in events}
+        recovered = 0
         for issue in active:
             if issue.id not in active_with_events:
                 logger.warning("Recovering interrupted issue #%d (was in %s)",
                               issue.issue_number, issue.phase)
                 await self.db.update_issue_phase(issue.id, "error")
                 await self.db.update_issue_error(issue.id, "Interrupted by restart")
+                recovered += 1
+        if recovered:
+            logger.info("Recovered %d interrupted issues on startup", recovered)
 
     async def _process_event(self, event: Event):
         issue = await self.db.get_issue_by_id(event.issue_id)
@@ -89,6 +105,12 @@ class Dispatcher:
             logger.exception("Error processing event %d for issue #%d", event.id, issue.issue_number)
             await self.db.update_issue_phase(issue.id, "error")
             await self.db.update_issue_error(issue.id, str(e))
+            if self.audit:
+                await self.audit.log(
+                    "phase_transition", "error",
+                    issue_id=issue.id, event_id=event.id,
+                    success=False, error_message=str(e),
+                )
             target = issue.pr_number or issue.issue_number
             try:
                 await self.github.post_comment(
