@@ -44,17 +44,56 @@ def test_get_implementation_subagents(agent_service):
     assert "code-reviewer" in agents
 
 
-def test_parse_interpretation_valid(agent_service):
-    result_text = json.dumps({"intent": "approve", "response": "Looks good"})
-    interp = agent_service._parse_interpretation(result_text)
+def test_classify_lgtm_approves(agent_service):
+    interp = agent_service._classify_comment_text("LGTM", "plan_review")
     assert interp.intent == "approve"
 
 
-def test_parse_interpretation_invalid_defaults_to_revise(agent_service):
-    interp = agent_service._parse_interpretation("unparseable garbage")
+def test_classify_plan_approved(agent_service):
+    interp = agent_service._classify_comment_text(
+        "[Review \u2014 COMMENTED]\n\nPlan approved.", "plan_review"
+    )
+    assert interp.intent == "approve"
+
+
+def test_classify_changes_requested_revises(agent_service):
+    interp = agent_service._classify_comment_text(
+        "[Review \u2014 CHANGES_REQUESTED]\n\nPlease fix the tests.", "plan_review"
+    )
     assert interp.intent == "revise"
 
 
-def test_parse_interpretation_none_defaults_to_revise(agent_service):
-    interp = agent_service._parse_interpretation(None)
+def test_classify_github_approved_review(agent_service):
+    interp = agent_service._classify_comment_text(
+        "[Review \u2014 APPROVED]\n\nShip it!", "code_review"
+    )
+    assert interp.intent == "approve"
+
+
+def test_classify_question(agent_service):
+    interp = agent_service._classify_comment_text(
+        "Why did you choose this approach?", "plan_review"
+    )
+    assert interp.intent == "question"
+
+
+def test_classify_back_to_planning(agent_service):
+    interp = agent_service._classify_comment_text(
+        "Let's rethink this approach", "code_review"
+    )
+    assert interp.intent == "back_to_planning"
+
+
+def test_classify_unknown_defaults_to_revise(agent_service):
+    interp = agent_service._classify_comment_text(
+        "Change the database schema to use UUIDs", "plan_review"
+    )
+    assert interp.intent == "revise"
+
+
+def test_classify_inline_comments_not_approve(agent_service):
+    interp = agent_service._classify_comment_text(
+        "[Review \u2014 COMMENTED]\n\nLooks good\n\nInline comments:\n- src/foo.py:10 \u2014 fix this",
+        "plan_review",
+    )
     assert interp.intent == "revise"

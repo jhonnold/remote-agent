@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 from remote_agent.config import Config
@@ -9,7 +10,6 @@ from remote_agent.db import Database
 from remote_agent.exceptions import AgentError
 from remote_agent.prompts.planning import build_planning_system_prompt, build_planning_user_prompt
 from remote_agent.prompts.implementation import build_implementation_system_prompt, build_implementation_user_prompt
-from remote_agent.prompts.review import build_review_system_prompt, build_review_user_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -84,34 +84,7 @@ class AgentService:
 
     async def interpret_comment(self, *, comment: str, context: str,
                                  issue_title: str, issue_id: int) -> CommentInterpretation:
-        from claude_agent_sdk import query, ClaudeAgentOptions, tool, create_sdk_mcp_server
-
-        @tool("classify_comment", "Classify a PR comment's intent and provide a response",
-              {"intent": str, "response": str})
-        async def classify_comment(args):
-            return {"content": [{"type": "text", "text": json.dumps(args)}]}
-
-        review_server = create_sdk_mcp_server(
-            name="review", version="1.0.0", tools=[classify_comment],
-        )
-
-        system_prompt = build_review_system_prompt()
-        user_prompt = build_review_user_prompt(
-            comment=comment, context=context, issue_title=issue_title,
-        )
-
-        options = ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            mcp_servers={"review": review_server},
-            allowed_tools=["mcp__review__classify_comment"],
-            permission_mode="bypassPermissions",
-            model=self.config.agent.review_model,
-            max_turns=1,
-            max_budget_usd=0.50,
-            cwd="/tmp",
-        )
-        result = await self._run_query(user_prompt, options, issue_id, phase="review")
-        return self._parse_interpretation(result.result_text)
+        return self._classify_comment_text(comment, context)
 
     async def _run_query(self, prompt: str, options, issue_id: int, phase: str,
                           allow_resume: bool = False) -> AgentResult:
@@ -251,28 +224,45 @@ Do NOT trust the implementer's report. Read the actual code and tests yourself.
             ),
         }
 
-    def _parse_interpretation(self, result_text: str | None) -> CommentInterpretation:
-        if not result_text:
-            return CommentInterpretation(intent="revise", response="Could not interpret comment.")
-        try:
-            # Try to extract JSON from the result text
-            # The classify_comment tool returns JSON, but the result may have surrounding text
-            for line in result_text.split("\n"):
-                line = line.strip()
-                if line.startswith("{"):
-                    data = json.loads(line)
-                    intent = data.get("intent", "revise")
-                    if intent not in ("approve", "revise", "question", "back_to_planning"):
-                        intent = "revise"
-                    return CommentInterpretation(
-                        intent=intent,
-                        response=data.get("response"),
-                    )
-            # Try parsing the whole thing
-            data = json.loads(result_text)
-            intent = data.get("intent", "revise")
-            if intent not in ("approve", "revise", "question", "back_to_planning"):
-                intent = "revise"
-            return CommentInterpretation(intent=intent, response=data.get("response"))
-        except (json.JSONDecodeError, KeyError, TypeError):
-            return CommentInterpretation(intent="revise", response="Could not interpret comment.")
+    # Patterns for review header, approval phrases, and back-to-planning phrases
+    _REVIEW_HEADER_RE = re.compile(r'^\[Review\s*[—–-]\s*(\w+)\]\s*', re.MULTILINE)
+    _APPROVE_RE = re.compile(
+        r'\b(lgtm|looks?\s+good|approved?|ship\s+it|go\s+ahead)\b', re.IGNORECASE,
+    )
+    _BACK_TO_PLANNING_RE = re.compile(
+        r'\b(back\s+to\s+planning|rethink|plan\s+needs?\s+to\s+change)\b', re.IGNORECASE,
+    )
+
+    def _classify_comment_text(self, comment: str, context: str) -> CommentInterpretation:
+        # Extract review state from formatted header (e.g. "[Review — APPROVED]")
+        header_match = self._REVIEW_HEADER_RE.match(comment)
+        review_state = header_match.group(1).upper() if header_match else None
+
+        # Strip header to get the actual body text
+        body = self._REVIEW_HEADER_RE.sub('', comment).strip()
+
+        # Separate inline comments section from body text
+        inline_idx = body.find('\nInline comments:\n')
+        has_inline = inline_idx >= 0
+        text_body = body[:inline_idx].strip() if has_inline else body
+
+        # GitHub review state is the strongest signal
+        if review_state == 'APPROVED':
+            return CommentInterpretation(intent="approve")
+        if review_state == 'CHANGES_REQUESTED':
+            return CommentInterpretation(intent="revise")
+
+        # Check for approval phrases (only when no inline revision comments)
+        if self._APPROVE_RE.search(text_body) and not has_inline:
+            return CommentInterpretation(intent="approve")
+
+        # Check for back-to-planning (code_review only)
+        if context == 'code_review' and self._BACK_TO_PLANNING_RE.search(text_body):
+            return CommentInterpretation(intent="back_to_planning")
+
+        # Simple question detection
+        if '?' in text_body:
+            return CommentInterpretation(intent="question")
+
+        # Default to revise (safe fallback)
+        return CommentInterpretation(intent="revise")

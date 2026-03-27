@@ -30,3 +30,5 @@ remote-agent.log.*
 
 # Local Claude config
 .claude.local.md
+
+*.jsonl
