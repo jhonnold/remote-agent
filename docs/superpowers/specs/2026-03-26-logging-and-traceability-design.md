@@ -58,6 +58,16 @@ class LoggingConfig:
 
 Added to `Config` as `logging: LoggingConfig`. The `logging:` section is optional in `config.yaml` — defaults are used when absent. File paths resolved relative to config directory, consistent with `database.path`.
 
+`load_config()` must also be updated: the `Config(...)` constructor call (currently line 85) must pass `logging=LoggingConfig(**raw.get("logging", {}))`. The `get()` with default `{}` ensures existing config files without a `logging:` section continue to work.
+
+Example `config.yaml` addition (optional):
+```yaml
+logging:
+  level: INFO
+  file: remote-agent.log
+  audit_file: audit.jsonl
+```
+
 ### Changes to `dispatcher.py`
 
 Per-event context isolation via `contextvars.copy_context()` + `asyncio.create_task(coro, context=ctx)`, awaited immediately to preserve sequential processing:
@@ -67,7 +77,7 @@ for event in events:
     ctx = contextvars.copy_context()
     ctx.run(current_issue_id.set, event.issue_id)
     ctx.run(current_event_id.set, event.id)
-    await asyncio.get_event_loop().create_task(
+    await asyncio.create_task(
         self._process_event(event), context=ctx
     )
 ```
@@ -92,8 +102,11 @@ CREATE TABLE IF NOT EXISTS audit_log (
     duration_ms INTEGER,
     success INTEGER NOT NULL,
     error_message TEXT,
-    FOREIGN KEY (issue_id) REFERENCES issues(id),
-    FOREIGN KEY (event_id) REFERENCES events(id)
+    FOREIGN KEY (issue_id) REFERENCES issues(id)
+    -- event_id is nullable and has no FK constraint: audit records may be
+    -- created outside the context of a specific event (e.g., startup recovery),
+    -- and the ContextVar default is None. The field is informational, populated
+    -- from the ContextVar when available.
 );
 CREATE INDEX IF NOT EXISTS idx_audit_log_issue_id ON audit_log(issue_id);
 ```
@@ -122,8 +135,13 @@ Append-only JSON lines file. Path configurable via `config.logging.audit_file` (
 ### Integration
 
 - `AuditLogger` created in `main.py:create_app()`, passed to `Dispatcher`
-- `Dispatcher` holds a reference and passes it to phase handlers
-- `AuditLogger` is optional in handler constructors: `audit: AuditLogger | None = None`. Handlers check `if self.audit:` before calling.
+- `Dispatcher.__init__` gains `audit: AuditLogger | None = None` as a sixth parameter. Updated signature: `__init__(self, config, db, github, agent_service, workspace_mgr, audit=None)`
+- `Dispatcher.__init__` passes `audit` to each phase handler constructor (lines 25-28)
+- Each phase handler constructor gains `audit: AuditLogger | None = None` as the last parameter. Handlers check `if self.audit:` before calling. The optional default means existing test fixtures continue to work without changes unless testing audit behavior.
+- **Call sites requiring updates:**
+  1. `main.py:create_app()` — pass `audit` to `Dispatcher(...)`
+  2. `tests/test_dispatcher.py` dispatcher fixture — existing fixture continues to work (param is optional)
+  3. `tests/test_integration.py` line 51 — pass `audit` to `Dispatcher(...)` to wire up integration audit testing
 - Phase handlers call `audit.log()` for key domain actions (PR creation, branch push, comment classification, phase transitions)
 - `Dispatcher._process_event` error path also calls `audit.log()` with `success=False`
 - `github.py` and `workspace.py` do NOT call audit directly — they log via `logging`. The calling phase handler decides what's audit-worthy.
@@ -149,7 +167,7 @@ Append-only JSON lines file. Path configurable via `config.logging.audit_file` (
 
 ### `agent.py` — `_run_query`
 - `INFO` at start: "Starting {phase} query for issue {issue_id}, model={model}"
-- Existing resume log (line 127) repositioned inside `_run_query` flow, after the "Starting" INFO
+- Existing resume log (line 127) kept in place — it already fires inside `_run_query` after the session lookup. The new "Starting" INFO is added before the resume check, so the sequence is: "Starting {phase} query..." then conditionally "Resuming session..." then "Completed {phase} query..."
 - `INFO` at completion: "Completed {phase} query for issue {issue_id}, cost=${cost}, tokens={input}+{output}, session={session_id}"
 - `WARNING` on error: "Query failed for issue {issue_id} phase={phase}: {error}" — intentionally kept alongside dispatcher's exception log because it adds phase/model context the generic catch lacks
 
@@ -173,8 +191,9 @@ Append-only JSON lines file. Path configurable via `config.logging.audit_file` (
 - Phase handlers make audit calls for key domain actions
 
 ### `main.py`
-- Calls `setup_logging(config)` instead of `logging.basicConfig()`
+- `run()` uses two-phase logging setup: (1) call `logging.basicConfig(level=logging.INFO)` at the top for minimal console logging during startup, then (2) after `create_app()` returns, call `setup_logging(config)` to reconfigure with JSON formatting, file handler, and config-driven level. This resolves the chicken-and-egg problem where `config` is not available until after `create_app()`.
 - Existing startup and shutdown INFO logs — kept as-is
+- `AuditLogger.close()` called in the `finally` block alongside `db.close()`
 
 ---
 
