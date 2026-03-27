@@ -49,3 +49,23 @@ async def test_back_to_planning_resets_state(handler, deps, review_issue):
     deps["github"].mark_pr_draft.assert_called_once()
     deps["workspace_mgr"].reset_to_commit.assert_called_once()
     deps["db"].create_event.assert_called_once()
+
+
+async def test_code_review_approve_audit(deps):
+    audit = AsyncMock()
+    handler = CodeReviewHandler(deps["db"], deps["github"], deps["agent_service"],
+                                 deps["workspace_mgr"], audit=audit)
+
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="", phase="code_review",
+                  pr_number=10, branch_name="agent/issue-42")
+    event = Event(id=1, issue_id=1, event_type="new_comment", payload={"body": "Ship it"})
+    deps["agent_service"].interpret_comment.return_value = CommentInterpretation(intent="approve")
+
+    result = await handler.handle(issue, event)
+
+    assert result.next_phase == "completed"
+    assert audit.log.call_count >= 1
+    categories = [c.args[0] for c in audit.log.call_args_list]
+    assert "comment_classification" in categories
+    assert "phase_transition" in categories

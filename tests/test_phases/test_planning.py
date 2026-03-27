@@ -66,3 +66,24 @@ async def test_planning_revision_reuses_existing_pr(handler, deps, new_issue_eve
 
     assert result.next_phase == "plan_review"
     deps["github"].create_pr.assert_not_called()  # PR already exists
+
+
+async def test_planning_audit_records(deps, new_issue, new_issue_event):
+    audit = AsyncMock()
+    handler = PlanningHandler(deps["db"], deps["github"], deps["agent_service"],
+                               deps["workspace_mgr"], audit=audit)
+
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["workspace_mgr"].get_head_commit.return_value = "abc123"
+    deps["agent_service"].run_planning.return_value = AgentResult(
+        success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
+    )
+    deps["github"].create_pr.return_value = 10
+
+    result = await handler.handle(new_issue, new_issue_event)
+
+    assert result.next_phase == "plan_review"
+    # Verify audit was called for PR creation and phase transition
+    assert audit.log.call_count >= 1
+    categories = [c.args[0] for c in audit.log.call_args_list]
+    assert "phase_transition" in categories
