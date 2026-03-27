@@ -85,6 +85,67 @@ The agent starts polling your configured repos every 60 seconds (configurable). 
 
 On startup, it recovers any issues that were interrupted by a previous shutdown.
 
+### Running as a systemd Service
+
+For persistent operation, run the agent as a systemd user service so it starts on boot and restarts on failure.
+
+**1. Create the service file:**
+
+```bash
+mkdir -p ~/.config/systemd/user
+
+cat > ~/.config/systemd/user/remote-agent.service << 'EOF'
+[Unit]
+Description=Remote Agent - Autonomous GitHub Issue Handler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/remote-agent
+ExecStart=/path/to/python3 -m remote_agent.main
+Restart=on-failure
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/path/to/workspaces /path/to/remote-agent
+
+[Install]
+WantedBy=default.target
+EOF
+```
+
+**2. Enable and start the service:**
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable remote-agent.service
+systemctl --user start remote-agent.service
+```
+
+**3. Enable lingering** so the service runs even when you're not logged in:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+**4. Check status and logs:**
+
+```bash
+systemctl --user status remote-agent.service
+journalctl --user -u remote-agent.service -f
+```
+
+Logs go to both journald and the rotating `remote-agent.log` file in the working directory.
+
+**5. Restart after config changes:**
+
+```bash
+systemctl --user restart remote-agent.service
+```
+
 ## Configuration Reference
 
 | Section | Key | Default | Description |
