@@ -33,6 +33,13 @@ class DatabaseConfig:
 
 
 @dataclass
+class LoggingConfig:
+    level: str = "INFO"
+    file: str = "remote-agent.log"
+    audit_file: str = "audit.jsonl"
+
+
+@dataclass
 class AgentConfig:
     default_model: str = "sonnet"
     planning_model: str = "opus"
@@ -53,6 +60,7 @@ class Config:
     workspace: WorkspaceConfig
     database: DatabaseConfig
     agent: AgentConfig
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
 def load_config(config_path: str) -> Config:
@@ -82,6 +90,15 @@ def load_config(config_path: str) -> Config:
     if not Path(db_path).is_absolute():
         db_path = str(path.parent / db_path)
 
+    # Resolve logging file paths relative to config file
+    logging_raw = raw.get("logging", {})
+    log_file = logging_raw.get("file", "remote-agent.log")
+    if not Path(log_file).is_absolute():
+        logging_raw["file"] = str(path.parent / log_file)
+    audit_file = logging_raw.get("audit_file", "audit.jsonl")
+    if not Path(audit_file).is_absolute():
+        logging_raw["audit_file"] = str(path.parent / audit_file)
+
     return Config(
         repos=repos,
         users=users,
@@ -90,4 +107,5 @@ def load_config(config_path: str) -> Config:
         workspace=WorkspaceConfig(**raw.get("workspace", {})),
         database=DatabaseConfig(path=db_path),
         agent=AgentConfig(**raw.get("agent", {})),
+        logging=LoggingConfig(**logging_raw),
     )

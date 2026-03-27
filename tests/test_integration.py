@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from remote_agent.db import Database
 from remote_agent.poller import Poller
 from remote_agent.dispatcher import Dispatcher
-from remote_agent.config import Config, RepoConfig, PollingConfig, TriggerConfig, WorkspaceConfig, DatabaseConfig, AgentConfig
+from remote_agent.config import Config, RepoConfig, PollingConfig, TriggerConfig, WorkspaceConfig, DatabaseConfig, AgentConfig, LoggingConfig
 from remote_agent.agent import AgentResult, CommentInterpretation
 
 
@@ -18,6 +18,7 @@ def config():
         workspace=WorkspaceConfig(base_dir="/tmp/ws"),
         database=DatabaseConfig(path=""),  # Will be overridden
         agent=AgentConfig(),
+        logging=LoggingConfig(),
     )
 
 
