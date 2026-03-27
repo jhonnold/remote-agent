@@ -80,3 +80,49 @@ class TestCorrelationFilter:
         assert record.issue_id is None
         assert record.event_id is None
         assert record.operation_id is None
+
+
+from remote_agent.logging_config import setup_logging
+from remote_agent.config import LoggingConfig, Config, RepoConfig, PollingConfig, TriggerConfig, WorkspaceConfig, DatabaseConfig, AgentConfig
+
+
+def _make_config(tmp_path, level="INFO"):
+    return Config(
+        repos=[RepoConfig(owner="o", name="r")],
+        users=["u"],
+        polling=PollingConfig(),
+        trigger=TriggerConfig(),
+        workspace=WorkspaceConfig(),
+        database=DatabaseConfig(),
+        agent=AgentConfig(),
+        logging=LoggingConfig(level=level, file=str(tmp_path / "test.log"), audit_file=str(tmp_path / "audit.jsonl")),
+    )
+
+
+class TestSetupLogging:
+    def test_emits_json_to_file(self, tmp_path):
+        config = _make_config(tmp_path)
+        setup_logging(config)
+        test_logger = logging.getLogger("test.setup")
+        test_logger.info("hello from test")
+        log_file = tmp_path / "test.log"
+        assert log_file.exists()
+        line = log_file.read_text().strip().split("\n")[-1]
+        data = json.loads(line)
+        assert data["message"] == "hello from test"
+        # Cleanup: remove handlers to avoid interference with other tests
+        logging.root.handlers.clear()
+
+    def test_loglevel_env_overrides_config(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGLEVEL", "DEBUG")
+        config = _make_config(tmp_path, level="WARNING")
+        setup_logging(config)
+        assert logging.root.level == logging.DEBUG
+        logging.root.handlers.clear()
+
+    def test_config_level_used_when_no_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("LOGLEVEL", raising=False)
+        config = _make_config(tmp_path, level="WARNING")
+        setup_logging(config)
+        assert logging.root.level == logging.WARNING
+        logging.root.handlers.clear()
