@@ -26,6 +26,7 @@ async def db(tmp_path):
 @pytest.fixture
 def mock_github():
     gh = AsyncMock()
+    gh.get_pr_comments.return_value = []
     gh.get_pr_reviews.return_value = []
     gh.get_pr_review_comments.return_value = []
     return gh
@@ -222,3 +223,102 @@ async def test_poll_updates_last_review_id(poller, db, mock_github):
     events = await db.get_unprocessed_events()
     comment_events = [e for e in events if e.event_type == "new_comment"]
     assert len(comment_events) == 1  # Still just 1
+
+
+async def test_poll_skips_completed_issue_not_closed(poller, db, mock_github):
+    """Completed issue still open on GitHub should NOT create reopen event (the PR #131 bug)."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "completed")
+    # issue_closed_seen defaults to False
+
+    mock_github.list_issues.return_value = [
+        {"number": 1, "title": "T", "body": "", "author": {"login": "testuser"}}
+    ]
+    await poller.poll_once()
+    events = await db.get_unprocessed_events()
+    assert len(events) == 0  # No reopen event!
+
+
+async def test_poll_detects_issue_closure(poller, db, mock_github):
+    """When a completed issue disappears from open list, mark it as closed."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "completed")
+
+    mock_github.list_issues.return_value = []  # Issue is no longer open
+    mock_github.get_pr_comments.return_value = [
+        {"id": 50, "body": "old comment", "author": "testuser", "created_at": "2026-01-01"},
+    ]
+    await poller.poll_once()
+
+    issue = await db.get_issue("owner", "repo", 1)
+    assert issue.issue_closed_seen is True
+    assert issue.last_issue_comment_id == 50
+
+
+async def test_poll_creates_reopen_event_after_close_and_new_comment(poller, db, mock_github):
+    """Genuine reopen: closed issue reappears with new comment."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "completed")
+    await db.mark_issue_closed(issue_id, last_issue_comment_id=50)
+
+    mock_github.list_issues.return_value = [
+        {"number": 1, "title": "T", "body": "", "author": {"login": "testuser"}}
+    ]
+    mock_github.get_pr_comments.return_value = [
+        {"id": 50, "body": "old comment", "author": "testuser", "created_at": "2026-01-01"},
+        {"id": 100, "body": "Please reopen this", "author": "testuser", "created_at": "2026-01-02"},
+    ]
+    await poller.poll_once()
+
+    events = await db.get_unprocessed_events()
+    assert len(events) == 1
+    assert events[0].event_type == "reopen"
+
+
+async def test_poll_no_reopen_without_new_comment(poller, db, mock_github):
+    """Closed issue reopened but no new comment — no reopen event."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "completed")
+    await db.mark_issue_closed(issue_id, last_issue_comment_id=50)
+
+    mock_github.list_issues.return_value = [
+        {"number": 1, "title": "T", "body": "", "author": {"login": "testuser"}}
+    ]
+    mock_github.get_pr_comments.return_value = [
+        {"id": 50, "body": "old comment", "author": "testuser", "created_at": "2026-01-01"},
+    ]
+    await poller.poll_once()
+
+    events = await db.get_unprocessed_events()
+    assert len(events) == 0
+
+
+async def test_poll_reopen_filters_non_allowlisted_comments(poller, db, mock_github):
+    """New comment from non-allowlisted user should not trigger reopen."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "completed")
+    await db.mark_issue_closed(issue_id, last_issue_comment_id=50)
+
+    mock_github.list_issues.return_value = [
+        {"number": 1, "title": "T", "body": "", "author": {"login": "testuser"}}
+    ]
+    mock_github.get_pr_comments.return_value = [
+        {"id": 100, "body": "random comment", "author": "stranger", "created_at": "2026-01-02"},
+    ]
+    await poller.poll_once()
+
+    events = await db.get_unprocessed_events()
+    assert len(events) == 0
+
+
+async def test_poll_skips_error_issue_not_closed(poller, db, mock_github):
+    """Error issue still open on GitHub should NOT create reopen event."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "error")
+
+    mock_github.list_issues.return_value = [
+        {"number": 1, "title": "T", "body": "", "author": {"login": "testuser"}}
+    ]
+    await poller.poll_once()
+    events = await db.get_unprocessed_events()
+    assert len(events) == 0

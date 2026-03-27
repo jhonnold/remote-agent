@@ -23,9 +23,12 @@ class Poller:
                 logger.exception("Error polling %s/%s", repo.owner, repo.name)
 
     async def _poll_repo(self, owner: str, name: str):
-        # 1. Check for new issues
+        # 1. Check for new/reopened issues
         issues = await self.github.list_issues(owner, name, self.config.trigger.label)
+        open_numbers = set()
+
         for issue_data in issues:
+            open_numbers.add(issue_data["number"])
             author = issue_data.get("author", {}).get("login", "")
             if author not in self.config.users:
                 continue
@@ -36,22 +39,28 @@ class Poller:
                 if issue_id:
                     await self.db.create_event(issue_id, "new_issue", issue_data)
                     logger.info("New issue detected: %s/%s#%d", owner, name, issue_data["number"])
-            elif existing.phase in ("completed", "error"):
-                await self.db.create_event(existing.id, "reopen", issue_data)
-                logger.info("Reopened issue: %s/%s#%d", owner, name, issue_data["number"])
+            elif existing.phase in ("completed", "error") and existing.issue_closed_seen:
+                # Genuine reopen candidate — check for new issue comment
+                await self._check_reopen(owner, name, existing)
 
-        # 2. Check for new PR comments on issues in review or error phases
+        # 2. Detect closed completed/error issues
+        done_issues = await self.db.get_completed_or_error_issues(owner, name)
+        for issue in done_issues:
+            if issue.issue_number not in open_numbers and not issue.issue_closed_seen:
+                await self._snapshot_and_mark_closed(owner, name, issue)
+
+        # 3. Check for new PR comments on issues in review or error phases
         review_issues = await self.db.get_issues_awaiting_comment(owner, name)
         for issue in review_issues:
             if not issue.pr_number:
                 continue
 
-            # 2a. Issue comments (existing)
+            # 3a. Issue comments (existing)
             try:
                 comments = await self.github.get_pr_comments(owner, name, issue.pr_number)
             except Exception:
                 logger.exception("Error fetching comments for PR #%d", issue.pr_number)
-                continue  # Preserve existing behavior: skip this issue entirely on fetch error
+                continue
 
             new_comments = [c for c in comments if c["id"] > issue.last_comment_id]
             new_comments = [c for c in new_comments if c["author"] in self.config.users]
@@ -61,7 +70,7 @@ class Poller:
                 logger.info("New comments on %s/%s PR#%d: %d",
                            owner, name, issue.pr_number, len(new_comments))
 
-            # 2b. PR reviews
+            # 3b. PR reviews
             try:
                 reviews = await self.github.get_pr_reviews(owner, name, issue.pr_number)
                 review_comments = await self.github.get_pr_review_comments(owner, name, issue.pr_number)
@@ -78,6 +87,35 @@ class Poller:
                 await self.db.create_review_events(issue.id, assembled)
                 logger.info("New reviews on %s/%s PR#%d: %d",
                            owner, name, issue.pr_number, len(assembled))
+
+    async def _check_reopen(self, owner: str, name: str, issue):
+        """Check if a closed-then-reopened issue has a new comment from an allowed user."""
+        try:
+            comments = await self.github.get_pr_comments(owner, name, issue.issue_number)
+        except Exception:
+            logger.exception("Error fetching issue comments for #%d", issue.issue_number)
+            return
+
+        new_comments = [c for c in comments if c["id"] > issue.last_issue_comment_id]
+        new_comments = [c for c in new_comments if c["author"] in self.config.users]
+
+        if new_comments:
+            latest = max(new_comments, key=lambda c: c["id"])
+            await self.db.update_last_issue_comment_id(issue.id, latest["id"])
+            await self.db.create_event(issue.id, "reopen", latest)
+            logger.info("Reopened issue: %s/%s#%d", owner, name, issue.issue_number)
+
+    async def _snapshot_and_mark_closed(self, owner: str, name: str, issue):
+        """Snapshot issue comment ID and mark issue as closed."""
+        try:
+            comments = await self.github.get_pr_comments(owner, name, issue.issue_number)
+        except Exception:
+            logger.exception("Error fetching issue comments for #%d on close detection", issue.issue_number)
+            return  # Skip — will retry on next poll
+
+        max_id = max((c["id"] for c in comments), default=0)
+        await self.db.mark_issue_closed(issue.id, max_id)
+        logger.info("Detected closure of %s/%s#%d", owner, name, issue.issue_number)
 
     def _assemble_review_events(self, reviews: list[dict], all_inline: list[dict]) -> list[dict]:
         """Bundle each review with its inline comments into a single event payload."""
