@@ -86,9 +86,18 @@ class Dispatcher:
                     await self.db.set_budget_notified(issue.id, True)
                 return  # Leave event unprocessed
 
-        # Reset plan_approved on reopen events (spec requirement)
+        # Close old PR and reset state on reopen events
         if event.event_type == "reopen":
+            if issue.pr_number:
+                try:
+                    await self.github.close_pr(
+                        issue.repo_owner, issue.repo_name, issue.pr_number,
+                        comment="Issue reopened. Closing this PR in favor of a fresh one.",
+                    )
+                except Exception:
+                    logger.exception("Failed to close old PR #%d", issue.pr_number)
             await self.db.set_plan_approved(issue.id, False)
+            await self.db.clear_issue_for_reopen(issue.id)
 
         logger.info("Processing event %d: issue #%d (%s -> %s)",
                     event.id, issue.issue_number, issue.phase, target_phase)

@@ -126,6 +126,29 @@ async def test_context_vars_isolated_per_event(mock_config, deps):
     assert captured[20] == 2
 
 
+async def test_reopen_closes_old_pr_and_clears_state(dispatcher, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
+                  title="T", body="", phase="completed", pr_number=5,
+                  branch_name="agent/issue-1", plan_commit_hash="abc123",
+                  issue_closed_seen=True)
+    event = Event(id=1, issue_id=1, event_type="reopen",
+                  payload={"body": "Please redo this"})
+    deps["db"].get_unprocessed_events.return_value = [event]
+    deps["db"].get_issue_by_id.return_value = issue
+    deps["db"].get_daily_spend.return_value = 0.0
+
+    with patch.object(dispatcher, "_get_handler") as mock_handler:
+        handler = AsyncMock()
+        handler.handle.return_value = PhaseResult(next_phase="plan_review")
+        mock_handler.return_value = handler
+        await dispatcher.process_events()
+
+    deps["github"].close_pr.assert_called_once_with("o", "r", 5,
+        comment="Issue reopened. Closing this PR in favor of a fresh one.")
+    deps["db"].set_plan_approved.assert_called_once_with(1, False)
+    deps["db"].clear_issue_for_reopen.assert_called_once_with(1)
+
+
 async def test_error_path_calls_audit(mock_config, deps):
     audit = AsyncMock()
     issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
