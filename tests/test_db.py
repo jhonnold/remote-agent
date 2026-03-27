@@ -94,3 +94,25 @@ async def test_transaction_for_comments(db):
     assert len(events) == 2
     issue = await db.get_issue("o", "r", 1)
     assert issue.last_comment_id == 101
+
+
+async def test_issue_has_last_review_id(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.last_review_id == 0
+
+
+async def test_create_review_events(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_pr(issue_id, 10)
+    reviews = [
+        {"id": 500, "body": "Change X"},
+        {"id": 501, "body": "Also fix Y"},
+    ]
+    await db.create_review_events(issue_id, reviews)
+    events = await db.get_unprocessed_events()
+    assert len(events) == 2
+    assert all(e.event_type == "new_comment" for e in events)
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.last_review_id == 501

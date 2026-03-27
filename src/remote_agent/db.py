@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS issues (
     plan_approved INTEGER DEFAULT 0,
     plan_commit_hash TEXT,
     last_comment_id INTEGER DEFAULT 0,
+    last_review_id INTEGER DEFAULT 0,
     budget_notified INTEGER DEFAULT 0,
     error_message TEXT,
     created_at TEXT DEFAULT (datetime('now')),
@@ -83,6 +84,12 @@ class Database:
         conn.row_factory = aiosqlite.Row
         await conn.executescript(SCHEMA)
         await conn.commit()
+        # Migrate existing databases
+        try:
+            await conn.execute("ALTER TABLE issues ADD COLUMN last_review_id INTEGER DEFAULT 0")
+            await conn.commit()
+        except Exception:
+            pass  # Column already exists
         return cls(conn)
 
     async def close(self):
@@ -234,6 +241,28 @@ class Database:
             await self._conn.rollback()
             raise
 
+    async def create_review_events(self, issue_id: int, reviews: list[dict]):
+        """Create events for PR reviews in a single transaction with last_review_id update."""
+        logger.debug("Creating %d review events for issue %d", len(reviews), issue_id)
+        if not reviews:
+            return
+        await self._conn.execute("BEGIN")
+        try:
+            for review in reviews:
+                await self._conn.execute(
+                    "INSERT INTO events (issue_id, event_type, payload) VALUES (?, ?, ?)",
+                    (issue_id, "new_comment", json.dumps(review)),
+                )
+            max_id = max(r["id"] for r in reviews)
+            await self._conn.execute(
+                "UPDATE issues SET last_review_id = ?, updated_at = datetime('now') WHERE id = ?",
+                (max_id, issue_id),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
     async def get_unprocessed_events(self) -> list[Event]:
         cursor = await self._conn.execute(
             "SELECT * FROM events WHERE processed = 0 ORDER BY created_at ASC"
@@ -315,6 +344,7 @@ class Database:
             phase=row["phase"], branch_name=row["branch_name"], pr_number=row["pr_number"],
             workspace_path=row["workspace_path"], plan_approved=bool(row["plan_approved"]),
             plan_commit_hash=row["plan_commit_hash"], last_comment_id=row["last_comment_id"],
+            last_review_id=row["last_review_id"],
             budget_notified=bool(row["budget_notified"]), error_message=row["error_message"],
             created_at=row["created_at"], updated_at=row["updated_at"],
         )
