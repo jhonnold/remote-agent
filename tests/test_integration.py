@@ -33,7 +33,10 @@ async def db(tmp_path):
 
 @pytest.fixture
 def github():
-    return AsyncMock()
+    gh = AsyncMock()
+    gh.get_pr_reviews.return_value = []
+    gh.get_pr_review_comments.return_value = []
+    return gh
 
 
 @pytest.fixture
