@@ -46,8 +46,11 @@ logging:
 """)
     config = load_config(str(config_file))
     assert config.logging.level == "DEBUG"
-    assert config.logging.file == "custom.log"
-    assert config.logging.audit_file == "custom-audit.jsonl"
+    # Paths are resolved to absolute relative to config file directory
+    assert Path(config.logging.file).name == "custom.log"
+    assert Path(config.logging.file).is_absolute()
+    assert Path(config.logging.audit_file).name == "custom-audit.jsonl"
+    assert Path(config.logging.audit_file).is_absolute()
 
 
 async def test_config_defaults_when_logging_section_absent(tmp_path):
@@ -65,8 +68,9 @@ agent: {}
 """)
     config = load_config(str(config_file))
     assert config.logging.level == "INFO"
-    assert config.logging.file == "remote-agent.log"
-    assert config.logging.audit_file == "audit.jsonl"
+    # Default paths are also resolved to absolute
+    assert Path(config.logging.file).name == "remote-agent.log"
+    assert Path(config.logging.audit_file).name == "audit.jsonl"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -467,7 +471,7 @@ from unittest.mock import patch
 
 from remote_agent.audit import AuditLogger
 from remote_agent.db import Database
-from remote_agent.logging_config import current_issue_id, current_event_id
+from remote_agent.logging_config import current_issue_id, current_event_id, current_operation_id
 
 
 @pytest.fixture(autouse=True)
@@ -475,6 +479,7 @@ def reset_context_vars():
     yield
     current_issue_id.set(None)
     current_event_id.set(None)
+    current_operation_id.set(None)
 
 
 @pytest.fixture
@@ -619,6 +624,24 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_issue_id ON audit_log(issue_id);
 ```
 
+Also add a `create_audit_entry` method to the `Database` class in `db.py` (after the `complete_agent_run` method, before the row mappers section):
+
+```python
+    # --- Audit ---
+
+    async def create_audit_entry(self, *, issue_id: int | None, event_id: int | None,
+                                  category: str, action: str, detail: str | None,
+                                  duration_ms: int | None, success: int,
+                                  error_message: str | None) -> None:
+        await self._conn.execute(
+            """INSERT INTO audit_log
+               (issue_id, event_id, category, action, detail, duration_ms, success, error_message)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (issue_id, event_id, category, action, detail, duration_ms, success, error_message),
+        )
+        await self._conn.commit()
+```
+
 - [ ] **Step 4: Create audit.py**
 
 Create `src/remote_agent/audit.py`:
@@ -674,16 +697,13 @@ class AuditLogger:
         self._file.write(json.dumps(record) + "\n")
         self._file.flush()
 
-        # Then DB
+        # Then DB (via Database public method)
         detail_json = json.dumps(detail) if detail else None
-        await self._db._conn.execute(
-            """INSERT INTO audit_log
-               (issue_id, event_id, category, action, detail, duration_ms, success, error_message)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (issue_id, event_id, category, action, detail_json, duration_ms,
-             int(success), error_message),
+        await self._db.create_audit_entry(
+            issue_id=issue_id, event_id=event_id, category=category,
+            action=action, detail=detail_json, duration_ms=duration_ms,
+            success=int(success), error_message=error_message,
         )
-        await self._db._conn.commit()
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -1036,7 +1056,7 @@ In `_run_query` (line 116), add INFO at start before `run_id` creation:
                           allow_resume: bool = False) -> AgentResult:
         from claude_agent_sdk import query, ResultMessage
 
-        logger.info("Starting %s query for issue %d", phase, issue_id)
+        logger.info("Starting %s query for issue %d, model=%s", phase, issue_id, getattr(options, "model", "unknown"))
         run_id = await self.db.create_agent_run(issue_id, phase)
         ...
 ```
@@ -1235,17 +1255,66 @@ class PlanReviewHandler:
 
 - [ ] **Step 4: Update CodeReviewHandler**
 
-Same pattern as PlanReviewHandler:
+In `src/remote_agent/phases/code_review.py`, update constructor and add audit calls:
 ```python
 class CodeReviewHandler:
     def __init__(self, db: Database, github: GitHubService,
                  agent_service: AgentService, workspace_mgr: WorkspaceManager,
                  audit=None):
-        ...
+        self.db = db
+        self.github = github
+        self.agent_service = agent_service
+        self.workspace_mgr = workspace_mgr
         self.audit = audit
-```
 
-Add audit after interpretation log.
+    async def handle(self, issue: Issue, event: Event) -> PhaseResult:
+        comment_body = event.payload.get("body", "")
+
+        interpretation = await self.agent_service.interpret_comment(
+            comment=comment_body, context="code_review",
+            issue_title=issue.title, issue_id=issue.id,
+        )
+        logger.info("Code review comment interpreted as: %s", interpretation.intent)
+        if self.audit:
+            await self.audit.log(
+                "comment_classification", interpretation.intent,
+                issue_id=issue.id, success=True,
+            )
+
+        if interpretation.intent == "approve":
+            await self.github.post_comment(
+                issue.repo_owner, issue.repo_name, issue.pr_number,
+                "Code approved! The PR is ready for you to merge.",
+            )
+            self.workspace_mgr.cleanup(issue.repo_owner, issue.repo_name, issue.issue_number)
+            if self.audit:
+                await self.audit.log("phase_transition", "completed",
+                                      issue_id=issue.id, success=True)
+            return PhaseResult(next_phase="completed")
+
+        elif interpretation.intent == "revise":
+            await self.db.create_event(issue.id, "revision_requested", event.payload)
+            return PhaseResult(next_phase="implementing")
+
+        elif interpretation.intent == "back_to_planning":
+            await self.db.set_plan_approved(issue.id, False)
+            await self.github.mark_pr_draft(issue.repo_owner, issue.repo_name, issue.pr_number)
+            if issue.plan_commit_hash:
+                await self.workspace_mgr.reset_to_commit(
+                    issue.workspace_path, issue.plan_commit_hash, issue.branch_name,
+                )
+            await self.db.create_event(issue.id, "revision_requested", event.payload)
+            return PhaseResult(next_phase="planning")
+
+        elif interpretation.intent == "question":
+            response = interpretation.response or "I'll look into that."
+            await self.github.post_comment(
+                issue.repo_owner, issue.repo_name, issue.pr_number, response,
+            )
+            return PhaseResult(next_phase="code_review")
+
+        return PhaseResult(next_phase="code_review")
+```
 
 - [ ] **Step 5: Update Dispatcher to pass audit to handlers**
 
@@ -1303,9 +1372,81 @@ async def test_planning_audit_records(deps, new_issue, new_issue_event):
     assert "phase_transition" in categories
 ```
 
-- [ ] **Step 2: Add similar tests for the other three handlers**
+- [ ] **Step 2: Add audit test to test_plan_review.py**
 
-Each test creates a handler with `audit=AsyncMock()`, runs the handler, and asserts `audit.log` was called with expected categories. Follow the existing test patterns in each file for mock setup.
+```python
+async def test_plan_review_approve_audit(deps):
+    audit = AsyncMock()
+    handler = PlanReviewHandler(deps["db"], deps["github"], deps["agent_service"], audit=audit)
+
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="", phase="plan_review", pr_number=10)
+    event = Event(id=1, issue_id=1, event_type="new_comment", payload={"body": "LGTM"})
+    deps["agent_service"].interpret_comment.return_value = CommentInterpretation(intent="approve")
+
+    result = await handler.handle(issue, event)
+
+    assert result.next_phase == "implementing"
+    assert audit.log.call_count >= 1
+    categories = [c.args[0] for c in audit.log.call_args_list]
+    assert "comment_classification" in categories
+```
+
+Add `from remote_agent.agent import CommentInterpretation` to the test file imports.
+
+- [ ] **Step 3: Add audit test to test_implementation.py**
+
+```python
+async def test_implementation_audit_records(deps):
+    audit = AsyncMock()
+    handler = ImplementationHandler(deps["db"], deps["github"], deps["agent_service"],
+                                     deps["workspace_mgr"], audit=audit)
+
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="", phase="implementing",
+                  pr_number=10, branch_name="agent/issue-42")
+    event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["agent_service"].run_implementation.return_value = AgentResult(
+        success=True, session_id="s1", cost_usd=1.0, input_tokens=100, output_tokens=200,
+    )
+
+    with patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.read_text", return_value="## Plan"):
+        result = await handler.handle(issue, event)
+
+    assert result.next_phase == "code_review"
+    assert audit.log.call_count >= 1
+    categories = [c.args[0] for c in audit.log.call_args_list]
+    assert "phase_transition" in categories
+```
+
+Add `from unittest.mock import patch` and `from remote_agent.agent import AgentResult` to the test file imports if not already present.
+
+- [ ] **Step 4: Add audit test to test_code_review.py**
+
+```python
+async def test_code_review_approve_audit(deps):
+    audit = AsyncMock()
+    handler = CodeReviewHandler(deps["db"], deps["github"], deps["agent_service"],
+                                 deps["workspace_mgr"], audit=audit)
+
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="", phase="code_review",
+                  pr_number=10, branch_name="agent/issue-42")
+    event = Event(id=1, issue_id=1, event_type="new_comment", payload={"body": "Ship it"})
+    deps["agent_service"].interpret_comment.return_value = CommentInterpretation(intent="approve")
+
+    result = await handler.handle(issue, event)
+
+    assert result.next_phase == "completed"
+    assert audit.log.call_count >= 1
+    categories = [c.args[0] for c in audit.log.call_args_list]
+    assert "comment_classification" in categories
+    assert "phase_transition" in categories
+```
+
+Add `from remote_agent.agent import CommentInterpretation` to the test file imports.
 
 - [ ] **Step 3: Run tests**
 
@@ -1373,9 +1514,14 @@ At the end of the test, add audit assertions:
     audit_records = [json.loads(line) for line in audit_lines]
     categories_and_actions = [(r["category"], r["action"]) for r in audit_records]
 
-    # Should have phase transition records for the full lifecycle
+    # Should have phase transition records for the full lifecycle (spec requires all 5)
     assert ("phase_transition", "plan_review") in categories_and_actions
+    assert ("phase_transition", "implementing") in categories_and_actions
     assert ("phase_transition", "code_review") in categories_and_actions
+    assert ("phase_transition", "completed") in categories_and_actions
+
+    # Should also have comment classification records
+    assert ("comment_classification", "approve") in categories_and_actions
 
     # All records should be successful
     assert all(r["success"] for r in audit_records)
