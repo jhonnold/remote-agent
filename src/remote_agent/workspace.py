@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 from remote_agent.config import Config
 from remote_agent.exceptions import GitError
@@ -20,12 +23,14 @@ class WorkspaceManager:
     async def ensure_workspace(self, owner: str, repo: str, issue_number: int) -> str:
         path = self._workspace_path(owner, repo, issue_number)
         if not path.exists():
+            logger.info("Cloning %s/%s into %s", owner, repo, path)
             path.parent.mkdir(parents=True, exist_ok=True)
             await self.github.clone_repo(owner, repo, str(path))
             # Set git identity for agent commits
             await self._run_git(["config", "user.name", "Remote Agent"], cwd=str(path))
             await self._run_git(["config", "user.email", "agent@localhost"], cwd=str(path))
         else:
+            logger.info("Updating workspace for %s/%s", owner, repo)
             default_branch = await self.github.detect_default_branch(owner, repo)
             await self._run_git(["fetch", "origin"], cwd=str(path))
             await self._run_git(["checkout", default_branch], cwd=str(path))
@@ -38,6 +43,7 @@ class WorkspaceManager:
             await self._run_git(["pull", "origin", branch], cwd=workspace)
         except GitError:
             await self._run_git(["checkout", "-b", branch], cwd=workspace)
+            logger.info("Created branch %s", branch)
 
     async def commit_and_push(self, workspace: str, branch: str, message: str) -> None:
         await self._run_git(["add", "-A"], cwd=workspace)
@@ -45,6 +51,7 @@ class WorkspaceManager:
         if status.strip():
             await self._run_git(["commit", "-m", message], cwd=workspace)
         await self._run_git(["push", "-u", "origin", branch], cwd=workspace)
+        logger.info("Pushed to branch %s", branch)
 
     async def get_head_commit(self, workspace: str) -> str:
         output = await self._run_git(["rev-parse", "HEAD"], cwd=workspace)
@@ -57,9 +64,11 @@ class WorkspaceManager:
     def cleanup(self, owner: str, repo: str, issue_number: int) -> None:
         path = self._workspace_path(owner, repo, issue_number)
         if path.exists():
+            logger.debug("Cleaned up workspace %s", path)
             shutil.rmtree(path)
 
     async def _run_git(self, args: list[str], cwd: str) -> str:
+        logger.debug("git %s", " ".join(args))
         proc = await asyncio.create_subprocess_exec(
             "git", *args,
             stdout=asyncio.subprocess.PIPE,

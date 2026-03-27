@@ -2,6 +2,9 @@
 from __future__ import annotations
 import asyncio
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 from remote_agent.exceptions import GitHubError
 
@@ -11,6 +14,19 @@ class GitHubService:
         self._default_branch_cache: dict[str, str] = {}
 
     async def _run_gh(self, args: list[str], cwd: str | None = None) -> str:
+        # Mask sensitive args for logging
+        masked = []
+        skip_next = False
+        for arg in args:
+            if skip_next:
+                masked.append(f"<{len(arg)} chars>")
+                skip_next = False
+            elif arg in ("--body", "--title"):
+                masked.append(arg)
+                skip_next = True
+            else:
+                masked.append(arg)
+        logger.debug("gh %s", " ".join(masked))
         proc = await asyncio.create_subprocess_exec(
             "gh", *args,
             stdout=asyncio.subprocess.PIPE,
