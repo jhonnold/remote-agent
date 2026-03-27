@@ -98,6 +98,8 @@ class Dispatcher:
                     logger.exception("Failed to close old PR #%d", issue.pr_number)
             await self.db.set_plan_approved(issue.id, False)
             await self.db.clear_issue_for_reopen(issue.id)
+            # Re-fetch issue so handler sees cleared state (branch_name=None → force=True)
+            issue = await self.db.get_issue_by_id(issue.id) or issue
 
         logger.info("Processing event %d: issue #%d (%s -> %s)",
                     event.id, issue.issue_number, issue.phase, target_phase)

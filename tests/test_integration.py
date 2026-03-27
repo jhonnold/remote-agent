@@ -214,3 +214,74 @@ async def test_review_comment_triggers_revision(config, db, github, agent_servic
 
     issue = await db.get_issue("owner", "repo", 1)
     assert issue.phase == "planning"  # Revision sent back to planning
+
+
+async def test_completed_issue_reopen_lifecycle(config, db, github, agent_service, workspace_mgr, audit, audit_file):
+    """Test: completed issue -> still open (no reopen) -> closed -> reopened with comment -> fresh planning -> new PR"""
+    poller = Poller(config, db, github)
+    dispatcher = Dispatcher(config, db, github, agent_service, workspace_mgr, audit=audit)
+    dispatcher._planning.agent_service = agent_service
+    dispatcher._planning.workspace_mgr = workspace_mgr
+    dispatcher._planning.github = github
+
+    # Setup: create a completed issue with an existing PR
+    issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "Add feature", "body": "Details"})
+    await db.update_issue_phase(issue_id, "completed")
+    await db.update_issue_pr(issue_id, 5)
+    await db.update_issue_branch(issue_id, "agent/issue-1")
+
+    # Poll 1: Issue still open on GitHub — should NOT create reopen
+    github.list_issues.return_value = [
+        {"number": 1, "title": "Add feature", "body": "Details", "author": {"login": "testuser"}}
+    ]
+    await poller.poll_once()
+    events = await db.get_unprocessed_events()
+    assert len(events) == 0
+
+    # Poll 2: Issue closed (not in open list) — should mark as closed
+    github.list_issues.return_value = []
+    github.get_pr_comments.return_value = [
+        {"id": 50, "body": "thanks", "author": "testuser", "created_at": "2026-01-01"},
+    ]
+    await poller.poll_once()
+    issue = await db.get_issue("owner", "repo", 1)
+    assert issue.issue_closed_seen is True
+    assert issue.last_issue_comment_id == 50
+
+    # Poll 3: Issue reopened with new comment — should create reopen event
+    github.list_issues.return_value = [
+        {"number": 1, "title": "Add feature", "body": "Details", "author": {"login": "testuser"}}
+    ]
+    github.get_pr_comments.return_value = [
+        {"id": 50, "body": "thanks", "author": "testuser", "created_at": "2026-01-01"},
+        {"id": 200, "body": "Actually, please also handle edge case X", "author": "testuser", "created_at": "2026-01-05"},
+    ]
+    await poller.poll_once()
+    events = await db.get_unprocessed_events()
+    assert len(events) == 1
+    assert events[0].event_type == "reopen"
+
+    # Dispatcher processes reopen: closes old PR, clears state, runs planning
+    github.close_pr = AsyncMock()
+    workspace_mgr.ensure_workspace.return_value = "/tmp/ws"
+    workspace_mgr.get_head_commit.return_value = "new123"
+    agent_service.run_planning.return_value = AgentResult(
+        success=True, session_id="s-reopen", cost_usd=1.0, input_tokens=100, output_tokens=200,
+    )
+    github.create_pr.return_value = 15  # New PR number
+
+    with patch("pathlib.Path.exists", return_value=False):
+        await dispatcher.process_events()
+
+    # Verify old PR was closed
+    github.close_pr.assert_called_once_with("owner", "repo", 5,
+        comment="Issue reopened. Closing this PR in favor of a fresh one.")
+
+    # Verify fresh state: new PR, branch cleared and regenerated
+    issue = await db.get_issue("owner", "repo", 1)
+    assert issue.phase == "plan_review"
+    assert issue.pr_number == 15  # New PR
+    assert issue.issue_closed_seen is False  # Reset
+
+    # Verify force=True was used for branch
+    workspace_mgr.ensure_branch.assert_called_with("/tmp/ws", "agent/issue-1", force=True)
