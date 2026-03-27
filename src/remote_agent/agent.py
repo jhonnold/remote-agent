@@ -117,6 +117,8 @@ class AgentService:
                           allow_resume: bool = False) -> AgentResult:
         from claude_agent_sdk import query, ResultMessage
 
+        logger.info("Starting %s query for issue %d, model=%s", phase, issue_id, getattr(options, "model", "unknown"))
+
         run_id = await self.db.create_agent_run(issue_id, phase)
 
         # Support session resumption on retry
@@ -142,6 +144,9 @@ class AgentService:
                     input_tokens = usage.get("input_tokens", 0)
                     output_tokens = usage.get("output_tokens", 0)
 
+            logger.info("Completed %s query for issue %d, cost=$%.4f, tokens=%d+%d, session=%s",
+                        phase, issue_id, cost, input_tokens, output_tokens, session_id)
+
             await self.db.complete_agent_run(
                 run_id, session_id=session_id, result="success",
                 cost_usd=cost, input_tokens=input_tokens, output_tokens=output_tokens,
@@ -152,6 +157,7 @@ class AgentService:
                 result_text=result_text,
             )
         except Exception as e:
+            logger.warning("Query failed for issue %d phase=%s: %s", issue_id, phase, e)
             await self.db.complete_agent_run(
                 run_id, result="error", cost_usd=cost,
                 input_tokens=input_tokens, output_tokens=output_tokens,

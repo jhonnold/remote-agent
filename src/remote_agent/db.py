@@ -1,9 +1,12 @@
 # src/remote_agent/db.py
 from __future__ import annotations
 import json
+import logging
 from pathlib import Path
 
 import aiosqlite
+
+logger = logging.getLogger(__name__)
 
 from remote_agent.models import Issue, Event, AgentRun
 
@@ -94,6 +97,7 @@ class Database:
                 (repo_owner, repo_name, issue_data["number"], issue_data["title"], issue_data.get("body", "")),
             )
             await self._conn.commit()
+            logger.debug("Created issue %s/%s#%d", repo_owner, repo_name, issue_data["number"])
             return cursor.lastrowid
         except aiosqlite.IntegrityError:
             return None
@@ -132,6 +136,7 @@ class Database:
             (phase, issue_id),
         )
         await self._conn.commit()
+        logger.debug("Updated issue %d phase=%s", issue_id, phase)
 
     async def update_issue_branch(self, issue_id: int, branch: str):
         await self._conn.execute(
@@ -139,6 +144,7 @@ class Database:
             (branch, issue_id),
         )
         await self._conn.commit()
+        logger.debug("Updated issue %d branch=%s", issue_id, branch)
 
     async def update_issue_pr(self, issue_id: int, pr_number: int):
         await self._conn.execute(
@@ -146,6 +152,7 @@ class Database:
             (pr_number, issue_id),
         )
         await self._conn.commit()
+        logger.debug("Updated issue %d pr=%d", issue_id, pr_number)
 
     async def update_issue_workspace(self, issue_id: int, workspace_path: str):
         await self._conn.execute(
@@ -153,6 +160,7 @@ class Database:
             (workspace_path, issue_id),
         )
         await self._conn.commit()
+        logger.debug("Updated issue %d workspace=%s", issue_id, workspace_path)
 
     async def set_plan_approved(self, issue_id: int, approved: bool):
         await self._conn.execute(
@@ -160,6 +168,7 @@ class Database:
             (int(approved), issue_id),
         )
         await self._conn.commit()
+        logger.debug("Set issue %d plan_approved=%s", issue_id, approved)
 
     async def set_plan_commit_hash(self, issue_id: int, commit_hash: str):
         await self._conn.execute(
@@ -167,6 +176,7 @@ class Database:
             (commit_hash, issue_id),
         )
         await self._conn.commit()
+        logger.debug("Set issue %d plan_commit_hash=%s", issue_id, commit_hash)
 
     async def update_issue_error(self, issue_id: int, error_message: str):
         await self._conn.execute(
@@ -174,6 +184,7 @@ class Database:
             (error_message, issue_id),
         )
         await self._conn.commit()
+        logger.debug("Updated issue %d error=%s", issue_id, error_message)
 
     async def set_budget_notified(self, issue_id: int, notified: bool):
         await self._conn.execute(
@@ -181,6 +192,7 @@ class Database:
             (int(notified), issue_id),
         )
         await self._conn.commit()
+        logger.debug("Set issue %d budget_notified=%s", issue_id, notified)
 
     async def update_last_comment_id(self, issue_id: int, comment_id: int):
         await self._conn.execute(
@@ -188,6 +200,7 @@ class Database:
             (comment_id, issue_id),
         )
         await self._conn.commit()
+        logger.debug("Updated issue %d last_comment_id=%d", issue_id, comment_id)
 
     # --- Events ---
 
@@ -197,9 +210,11 @@ class Database:
             (issue_id, event_type, json.dumps(payload or {})),
         )
         await self._conn.commit()
+        logger.debug("Created event type=%s for issue %d", event_type, issue_id)
 
     async def create_comment_events(self, issue_id: int, comments: list[dict]):
         """Create events for multiple comments in a single transaction with last_comment_id update."""
+        logger.debug("Creating %d comment events for issue %d", len(comments), issue_id)
         if not comments:
             return
         await self._conn.execute("BEGIN")
@@ -229,6 +244,7 @@ class Database:
     async def mark_event_processed(self, event_id: int):
         await self._conn.execute("UPDATE events SET processed = 1 WHERE id = ?", (event_id,))
         await self._conn.commit()
+        logger.debug("Marked event %d processed", event_id)
 
     # --- Agent Runs ---
 
@@ -238,6 +254,7 @@ class Database:
             (issue_id, phase),
         )
         await self._conn.commit()
+        logger.debug("Created agent_run for issue %d phase=%s", issue_id, phase)
         return cursor.lastrowid
 
     async def complete_agent_run(self, run_id: int, *, session_id: str | None = None,
@@ -251,6 +268,7 @@ class Database:
             (session_id, result, cost_usd, input_tokens, output_tokens, error_message, run_id),
         )
         await self._conn.commit()
+        logger.debug("Completed agent_run %d result=%s", run_id, result)
 
     async def get_agent_run(self, run_id: int) -> AgentRun | None:
         cursor = await self._conn.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,))
@@ -285,6 +303,7 @@ class Database:
             (issue_id, event_id, category, action, detail, duration_ms, success, error_message),
         )
         await self._conn.commit()
+        logger.debug("Created audit entry category=%s action=%s", category, action)
 
     # --- Row mappers ---
 
