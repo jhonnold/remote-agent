@@ -73,6 +73,10 @@ agent:
   max_turns: 200
   max_budget_usd: 10.0
   daily_budget_usd: 50.0
+
+# Optional: auto-update (disabled by default)
+auto_update:
+  enabled: true  # Check for updates on main each poll cycle
 ```
 
 ## Running
@@ -106,6 +110,7 @@ WorkingDirectory=/path/to/remote-agent
 ExecStart=/path/to/python3 -m remote_agent.main
 Restart=on-failure
 RestartSec=10
+RestartForceExitStatus=42
 
 # Hardening
 NoNewPrivileges=true
@@ -164,6 +169,9 @@ systemctl --user restart remote-agent.service
 | `agent.max_turns` | — | `200` | Max agent turns per invocation |
 | `agent.max_budget_usd` | — | `10.0` | Max spend per single agent invocation |
 | `agent.daily_budget_usd` | — | `50.0` | Aggregate daily spend cap across all invocations |
+| `auto_update` | `enabled` | `false` | Check for updates on `main` each poll cycle |
+
+When `auto_update.enabled` is `true`, the agent checks for new commits on `main` each poll cycle. If an update is found, it pulls the changes, reinstalls dependencies, and exits with code 42. The systemd service picks this up via `RestartForceExitStatus=42` and restarts the agent with the new code.
 
 ## Issue Lifecycle
 

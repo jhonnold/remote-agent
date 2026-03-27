@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import sys
 from dataclasses import dataclass
 
 from remote_agent.config import load_config, Config
@@ -12,6 +13,7 @@ from remote_agent.agent import AgentService
 from remote_agent.poller import Poller
 from remote_agent.dispatcher import Dispatcher
 from remote_agent.audit import AuditLogger
+from remote_agent.updater import AutoUpdater
 
 logger = logging.getLogger("remote_agent")
 
@@ -23,6 +25,7 @@ class App:
     poller: Poller
     dispatcher: Dispatcher
     audit: AuditLogger | None = None
+    updater: AutoUpdater | None = None
 
 
 async def create_app(config_path: str = "config.yaml") -> App:
@@ -36,7 +39,9 @@ async def create_app(config_path: str = "config.yaml") -> App:
     poller = Poller(config, db, github)
     dispatcher = Dispatcher(config, db, github, agent_service, workspace_mgr, audit=audit)
 
-    return App(config=config, db=db, poller=poller, dispatcher=dispatcher, audit=audit)
+    updater = AutoUpdater() if config.auto_update.enabled else None
+
+    return App(config=config, db=db, poller=poller, dispatcher=dispatcher, audit=audit, updater=updater)
 
 
 async def run(config_path: str = "config.yaml"):
@@ -61,6 +66,16 @@ async def run(config_path: str = "config.yaml"):
                 await app.dispatcher.process_events()
             except Exception:
                 logger.exception("Unexpected error in main loop")
+            if app.updater:
+                try:
+                    if await app.updater.check_for_update():
+                        await app.updater.pull_update()
+                        logger.info("Update applied, restarting...")
+                        sys.exit(42)
+                except SystemExit:
+                    raise
+                except Exception:
+                    logger.exception("Update check failed, continuing...")
             await asyncio.sleep(app.config.polling.interval_seconds)
     finally:
         if app.audit:

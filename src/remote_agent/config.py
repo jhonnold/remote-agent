@@ -52,6 +52,11 @@ class AgentConfig:
 
 
 @dataclass
+class AutoUpdateConfig:
+    enabled: bool = False
+
+
+@dataclass
 class Config:
     repos: list[RepoConfig]
     users: list[str]
@@ -61,6 +66,7 @@ class Config:
     database: DatabaseConfig
     agent: AgentConfig
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    auto_update: AutoUpdateConfig = field(default_factory=AutoUpdateConfig)
 
 
 def load_config(config_path: str) -> Config:
@@ -108,4 +114,5 @@ def load_config(config_path: str) -> Config:
         database=DatabaseConfig(path=db_path),
         agent=AgentConfig(**raw.get("agent", {})),
         logging=LoggingConfig(**logging_raw),
+        auto_update=AutoUpdateConfig(**raw.get("auto_update", {})),
     )
