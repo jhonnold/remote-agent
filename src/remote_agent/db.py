@@ -51,6 +51,21 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     output_tokens INTEGER DEFAULT 0,
     error_message TEXT
 );
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    issue_id INTEGER,
+    event_id INTEGER,
+    category TEXT NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT,
+    duration_ms INTEGER,
+    success INTEGER NOT NULL,
+    error_message TEXT,
+    FOREIGN KEY (issue_id) REFERENCES issues(id)
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_issue_id ON audit_log(issue_id);
 """
 
 
@@ -256,6 +271,20 @@ class Database:
         )
         row = await cursor.fetchone()
         return row["total"]
+
+    # --- Audit ---
+
+    async def create_audit_entry(self, *, issue_id: int | None, event_id: int | None,
+                                  category: str, action: str, detail: str | None,
+                                  duration_ms: int | None, success: int,
+                                  error_message: str | None) -> None:
+        await self._conn.execute(
+            """INSERT INTO audit_log
+               (issue_id, event_id, category, action, detail, duration_ms, success, error_message)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (issue_id, event_id, category, action, detail, duration_ms, success, error_message),
+        )
+        await self._conn.commit()
 
     # --- Row mappers ---
 
