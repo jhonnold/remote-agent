@@ -33,21 +33,27 @@ def new_issue_event():
                  payload={"number": 42, "title": "Add auth", "body": "Need OAuth2"})
 
 
-async def test_planning_creates_branch_and_pr(handler, deps, new_issue, new_issue_event):
+async def test_planning_posts_plan_to_issue_not_pr(handler, deps, new_issue, new_issue_event):
     deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
     deps["workspace_mgr"].get_head_commit.return_value = "abc123"
     deps["agent_service"].run_planning.return_value = AgentResult(
         success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
-    deps["github"].create_pr.return_value = 10
 
-    result = await handler.handle(new_issue, new_issue_event)
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr("pathlib.Path.exists", lambda self: True)
+        m.setattr("pathlib.Path.read_text", lambda self: "# Plan\nSome plan content")
+        result = await handler.handle(new_issue, new_issue_event)
 
     assert result.next_phase == "plan_review"
-    deps["workspace_mgr"].ensure_branch.assert_called_once_with("/tmp/ws", "agent/issue-42", force=True)
-    deps["github"].create_pr.assert_called_once()
-    deps["db"].update_issue_pr.assert_called_once_with(1, 10)
-    deps["db"].set_plan_commit_hash.assert_called_once()
+    # Should NOT create a draft PR
+    deps["github"].create_pr.assert_not_called()
+    deps["db"].update_issue_pr.assert_not_called()
+    # Should post plan as issue comment using issue_number (42)
+    deps["github"].post_comment.assert_called_once()
+    call_args = deps["github"].post_comment.call_args
+    assert call_args[0][2] == 42  # issue_number, not pr_number
+    assert "# Plan" in call_args[0][3]  # Plan content in comment body
 
 
 async def test_planning_revision_reuses_existing_pr(handler, deps, new_issue_event):
@@ -65,7 +71,15 @@ async def test_planning_revision_reuses_existing_pr(handler, deps, new_issue_eve
     result = await handler.handle(issue, event)
 
     assert result.next_phase == "plan_review"
-    deps["github"].create_pr.assert_not_called()  # PR already exists
+    deps["github"].create_pr.assert_not_called()  # Planning no longer creates PRs
+    # Verify plan was posted to the issue as a comment
+    # In a revision scenario, the plan file may or may not exist on disk (workspace is mocked),
+    # so the comment may contain actual plan content or the fallback message.
+    deps["github"].post_comment.assert_called_once()
+    call_args = deps["github"].post_comment.call_args
+    assert call_args[0][2] == 42  # issue_number
+    # Comment should contain either actual plan or fallback message
+    assert "Plan" in call_args[0][3] or "Plan file created" in call_args[0][3]
 
 
 async def test_planning_after_reopen_uses_force_branch(handler, deps):
@@ -80,7 +94,6 @@ async def test_planning_after_reopen_uses_force_branch(handler, deps):
     deps["agent_service"].run_planning.return_value = AgentResult(
         success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
-    deps["github"].create_pr.return_value = 20
 
     result = await handler.handle(issue, event)
 
@@ -98,12 +111,11 @@ async def test_planning_audit_records(deps, new_issue, new_issue_event):
     deps["agent_service"].run_planning.return_value = AgentResult(
         success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
-    deps["github"].create_pr.return_value = 10
 
     result = await handler.handle(new_issue, new_issue_event)
 
     assert result.next_phase == "plan_review"
-    # Verify audit was called for PR creation and phase transition
+    # Verify audit was called for phase transition (no longer logs PR creation)
     assert audit.log.call_count >= 1
     categories = [c.args[0] for c in audit.log.call_args_list]
     assert "phase_transition" in categories

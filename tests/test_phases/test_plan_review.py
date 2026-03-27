@@ -19,7 +19,7 @@ def handler(deps):
 @pytest.fixture
 def review_issue():
     return Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
-                 title="Add auth", body="", phase="plan_review", pr_number=10)
+                 title="Add auth", body="", phase="plan_review", pr_number=None)
 
 
 async def test_approve_transitions_to_implementing(handler, deps, review_issue):
@@ -49,12 +49,34 @@ async def test_question_posts_response_and_stays(handler, deps, review_issue):
     deps["github"].post_comment.assert_called_once()
 
 
+async def test_approve_posts_to_issue(handler, deps, review_issue):
+    event = Event(id=1, issue_id=1, event_type="new_comment", payload={"body": "LGTM"})
+    deps["agent_service"].interpret_comment.return_value = CommentInterpretation(intent="approve")
+
+    result = await handler.handle(review_issue, event)
+
+    assert result.next_phase == "implementing"
+    deps["github"].post_comment.assert_called_once()
+    assert deps["github"].post_comment.call_args[0][2] == 42  # issue_number
+
+
+async def test_question_posts_response_to_issue(handler, deps, review_issue):
+    event = Event(id=1, issue_id=1, event_type="new_comment", payload={"body": "Why X?"})
+    deps["agent_service"].interpret_comment.return_value = CommentInterpretation(
+        intent="question", response="Because Y.")
+
+    result = await handler.handle(review_issue, event)
+
+    assert result.next_phase == "plan_review"
+    assert deps["github"].post_comment.call_args[0][2] == 42  # issue_number
+
+
 async def test_plan_review_approve_audit(deps):
     audit = AsyncMock()
     handler = PlanReviewHandler(deps["db"], deps["github"], deps["agent_service"], audit=audit)
 
     issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
-                  title="Add auth", body="", phase="plan_review", pr_number=10)
+                  title="Add auth", body="", phase="plan_review", pr_number=None)
     event = Event(id=1, issue_id=1, event_type="new_comment", payload={"body": "LGTM"})
     deps["agent_service"].interpret_comment.return_value = CommentInterpretation(intent="approve")
 

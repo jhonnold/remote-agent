@@ -53,9 +53,26 @@ class Poller:
         review_issues = await self.db.get_issues_awaiting_comment(owner, name)
         for issue in review_issues:
             if not issue.pr_number:
+                # No PR exists — poll issue comments directly
+                try:
+                    comments = await self.github.get_pr_comments(owner, name, issue.issue_number)
+                except Exception:
+                    logger.exception("Error fetching issue comments for #%d", issue.issue_number)
+                    continue
+                # last_comment_id is used to track both PR comments and issue comments.
+                # It's updated by create_comment_events regardless of phase/context.
+                new_comments = [
+                    c for c in comments
+                    if c["id"] > issue.last_comment_id and c["author"] in self.config.users
+                ]
+                if new_comments:
+                    await self.db.create_comment_events(issue.id, new_comments)
+                    logger.info("New comments on %s/%s issue#%d: %d",
+                               owner, name, issue.issue_number, len(new_comments))
                 continue
 
-            # 3a. Issue comments (existing)
+            # Has PR — existing PR comment + review polling (unchanged)
+            # 3a. Issue comments (on the PR)
             try:
                 comments = await self.github.get_pr_comments(owner, name, issue.pr_number)
             except Exception:

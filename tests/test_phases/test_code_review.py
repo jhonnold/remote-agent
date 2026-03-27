@@ -21,7 +21,7 @@ def review_issue():
     return Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
                  title="Add auth", body="", phase="code_review",
                  pr_number=10, branch_name="agent/issue-42",
-                 plan_commit_hash="abc123")
+                 plan_commit_hash="abc123", workspace_path="/tmp/ws")
 
 
 async def test_approve_completes(handler, deps, review_issue):
@@ -46,8 +46,34 @@ async def test_back_to_planning_resets_state(handler, deps, review_issue):
     result = await handler.handle(review_issue, event)
     assert result.next_phase == "planning"
     deps["db"].set_plan_approved.assert_called_once_with(1, False)
-    deps["github"].mark_pr_draft.assert_called_once()
+    deps["github"].close_pr.assert_called_once()
+    deps["github"].mark_pr_draft.assert_not_called()
+    deps["db"].update_issue_pr.assert_called_once_with(1, None)
     deps["workspace_mgr"].reset_to_commit.assert_called_once()
+    deps["db"].create_event.assert_called_once()
+
+
+
+async def test_back_to_planning_without_workspace_path(handler, deps):
+    """back_to_planning should skip reset_to_commit when workspace_path is None."""
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="", phase="code_review",
+                  pr_number=10, branch_name="agent/issue-42",
+                  plan_commit_hash="abc123", workspace_path=None)  # workspace_path is None
+    event = Event(id=1, issue_id=1, event_type="new_comment",
+                  payload={"body": "back to planning"})
+    deps["agent_service"].interpret_comment.return_value = CommentInterpretation(
+        intent="back_to_planning")
+
+    result = await handler.handle(issue, event)
+
+    assert result.next_phase == "planning"
+    # Should close PR and clear pr_number
+    deps["github"].close_pr.assert_called_once()
+    deps["db"].update_issue_pr.assert_called_once_with(1, None)
+    # Should NOT call reset_to_commit because workspace_path is None
+    deps["workspace_mgr"].reset_to_commit.assert_not_called()
+    # But create_event should still be called
     deps["db"].create_event.assert_called_once()
 
 

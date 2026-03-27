@@ -149,6 +149,29 @@ async def test_reopen_closes_old_pr_and_clears_state(dispatcher, deps):
     deps["db"].clear_issue_for_reopen.assert_called_once_with(1)
 
 
+async def test_error_comment_posted_to_issue_when_no_pr(mock_config, deps):
+    """When an issue has no PR, error comments should go to the issue number."""
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="T", body="", phase="new", pr_number=None)
+    event = Event(id=1, issue_id=1, event_type="new_issue", payload={})
+    deps["db"].get_unprocessed_events.return_value = [event]
+    deps["db"].get_issue_by_id.return_value = issue
+    deps["db"].get_daily_spend.return_value = 0.0
+
+    dispatcher = Dispatcher(mock_config, deps["db"], deps["github"],
+                            deps["agent_service"], deps["workspace_mgr"])
+
+    with patch.object(dispatcher, "_get_handler") as mock_handler:
+        handler = AsyncMock()
+        handler.handle.side_effect = RuntimeError("boom")
+        mock_handler.return_value = handler
+        await dispatcher.process_events()
+
+    # Should post to issue_number (42) since pr_number is None
+    deps["github"].post_comment.assert_called_once()
+    assert deps["github"].post_comment.call_args[0][2] == 42
+
+
 async def test_error_path_calls_audit(mock_config, deps):
     audit = AsyncMock()
     issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,

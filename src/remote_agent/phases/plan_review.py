@@ -35,7 +35,7 @@ class PlanReviewHandler:
         if interpretation.intent == "approve":
             await self.db.set_plan_approved(issue.id, True)
             await self.github.post_comment(
-                issue.repo_owner, issue.repo_name, issue.pr_number,
+                issue.repo_owner, issue.repo_name, issue.issue_number,
                 "Plan approved. Starting implementation...",
             )
             # Create event to drive the implementation handler
@@ -52,7 +52,7 @@ class PlanReviewHandler:
         elif interpretation.intent == "question":
             response = interpretation.response or "I'll look into that."
             await self.github.post_comment(
-                issue.repo_owner, issue.repo_name, issue.pr_number, response,
+                issue.repo_owner, issue.repo_name, issue.issue_number, response,
             )
             return PhaseResult(next_phase="plan_review")
 

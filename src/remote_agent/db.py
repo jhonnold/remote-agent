@@ -165,13 +165,13 @@ class Database:
         await self._conn.commit()
         logger.debug("Updated issue %d branch=%s", issue_id, branch)
 
-    async def update_issue_pr(self, issue_id: int, pr_number: int):
+    async def update_issue_pr(self, issue_id: int, pr_number: int | None):
         await self._conn.execute(
             "UPDATE issues SET pr_number = ?, updated_at = datetime('now') WHERE id = ?",
             (pr_number, issue_id),
         )
         await self._conn.commit()
-        logger.debug("Updated issue %d pr=%d", issue_id, pr_number)
+        logger.debug("Updated issue %d pr=%s", issue_id, pr_number)
 
     async def update_issue_workspace(self, issue_id: int, workspace_path: str):
         await self._conn.execute(

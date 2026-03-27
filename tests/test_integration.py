@@ -88,22 +88,21 @@ async def test_full_lifecycle_happy_path(config, db, github, agent_service, work
     issue = await db.get_issue("owner", "repo", 1)
     assert issue.phase == "new"
 
-    # Step 2: Dispatcher routes to planning
+    # Step 2: Dispatcher routes to planning (no PR created yet)
     workspace_mgr.ensure_workspace.return_value = "/tmp/ws"
     workspace_mgr.get_head_commit.return_value = "abc123"
     agent_service.run_planning.return_value = AgentResult(
         success=True, session_id="s1", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
-    github.create_pr.return_value = 5
 
     with patch("pathlib.Path.exists", return_value=False):
         await dispatcher.process_events()
 
     issue = await db.get_issue("owner", "repo", 1)
     assert issue.phase == "plan_review"
-    assert issue.pr_number == 5
+    assert issue.pr_number is None  # No PR created during planning
 
-    # Step 3: Human approves plan
+    # Step 3: Human approves plan (polls issue comments — no PR yet)
     github.get_pr_comments.return_value = [
         {"id": 100, "body": "LGTM, implement it", "author": "testuser", "created_at": "2026-01-01"}
     ]
@@ -116,7 +115,8 @@ async def test_full_lifecycle_happy_path(config, db, github, agent_service, work
     assert issue.phase == "implementing"
     assert issue.plan_approved is True
 
-    # Step 4: Implementation runs (triggered by revision_requested event from plan_review handler)
+    # Step 4: Implementation runs and creates the PR
+    github.create_pr.return_value = 5
     agent_service.run_implementation.return_value = AgentResult(
         success=True, session_id="s2", cost_usd=3.0, input_tokens=500, output_tokens=1000,
     )
@@ -127,6 +127,7 @@ async def test_full_lifecycle_happy_path(config, db, github, agent_service, work
 
     issue = await db.get_issue("owner", "repo", 1)
     assert issue.phase == "code_review"
+    assert issue.pr_number == 5  # PR created during implementation
 
     # Step 5: Human approves code
     github.get_pr_comments.return_value = [
@@ -159,7 +160,7 @@ async def test_full_lifecycle_happy_path(config, db, github, agent_service, work
 
 
 async def test_review_comment_triggers_revision(config, db, github, agent_service, workspace_mgr, audit, audit_file):
-    """Test: plan_review -> user submits PR review with inline comments -> revision -> planning"""
+    """Test: plan_review -> user posts issue comment requesting revision -> back to planning"""
     poller = Poller(config, db, github)
     dispatcher = Dispatcher(config, db, github, agent_service, workspace_mgr, audit=audit)
     dispatcher._planning.agent_service = agent_service
@@ -168,7 +169,7 @@ async def test_review_comment_triggers_revision(config, db, github, agent_servic
     dispatcher._plan_review.agent_service = agent_service
     dispatcher._plan_review.github = github
 
-    # Setup: create issue already in plan_review with a PR
+    # Setup: plan is posted to issue (no PR created during planning)
     github.list_issues.return_value = [
         {"number": 1, "title": "Add feature", "body": "Details", "author": {"login": "testuser"}}
     ]
@@ -177,7 +178,6 @@ async def test_review_comment_triggers_revision(config, db, github, agent_servic
     agent_service.run_planning.return_value = AgentResult(
         success=True, session_id="s1", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
-    github.create_pr.return_value = 5
 
     await poller.poll_once()
     with patch("pathlib.Path.exists", return_value=False):
@@ -185,28 +185,22 @@ async def test_review_comment_triggers_revision(config, db, github, agent_servic
 
     issue = await db.get_issue("owner", "repo", 1)
     assert issue.phase == "plan_review"
+    assert issue.pr_number is None  # No PR created during planning
 
-    # User submits a PR review with inline comments (no issue comments)
-    github.get_pr_comments.return_value = []
-    github.get_pr_reviews.return_value = [
-        {"id": 500, "body": "A few changes needed", "state": "CHANGES_REQUESTED",
-         "author": "testuser", "submitted_at": "2026-01-02"}
-    ]
-    github.get_pr_review_comments.return_value = [
-        {"id": 900, "body": "use a map here instead", "path": "src/app.js", "line": 15,
-         "author": "testuser", "review_id": 500, "created_at": "2026-01-02"}
+    # User posts an issue comment requesting revision (no PR exists, so poller reads issue comments)
+    github.get_pr_comments.return_value = [
+        {"id": 100, "body": "Please revise the approach — use a different strategy",
+         "author": "testuser", "created_at": "2026-01-02"}
     ]
 
     await poller.poll_once()
 
-    # Verify event was created with assembled body
+    # Verify event was created
     events = await db.get_unprocessed_events()
     comment_events = [e for e in events if e.event_type == "new_comment"]
     assert len(comment_events) == 1
     payload = comment_events[0].payload
-    assert "A few changes needed" in payload["body"]
-    assert "src/app.js:15" in payload["body"]
-    assert "use a map here instead" in payload["body"]
+    assert "revise" in payload["body"].lower()
 
     # Dispatcher routes to plan_review handler, which classifies as revise
     agent_service.interpret_comment.return_value = CommentInterpretation(intent="revise")
@@ -217,7 +211,7 @@ async def test_review_comment_triggers_revision(config, db, github, agent_servic
 
 
 async def test_completed_issue_reopen_lifecycle(config, db, github, agent_service, workspace_mgr, audit, audit_file):
-    """Test: completed issue -> still open (no reopen) -> closed -> reopened with comment -> fresh planning -> new PR"""
+    """Test: completed issue -> still open (no reopen) -> closed -> reopened with comment -> fresh planning -> plan_review (no PR yet)"""
     poller = Poller(config, db, github)
     dispatcher = Dispatcher(config, db, github, agent_service, workspace_mgr, audit=audit)
     dispatcher._planning.agent_service = agent_service
@@ -268,7 +262,6 @@ async def test_completed_issue_reopen_lifecycle(config, db, github, agent_servic
     agent_service.run_planning.return_value = AgentResult(
         success=True, session_id="s-reopen", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
-    github.create_pr.return_value = 15  # New PR number
 
     with patch("pathlib.Path.exists", return_value=False):
         await dispatcher.process_events()
@@ -277,10 +270,10 @@ async def test_completed_issue_reopen_lifecycle(config, db, github, agent_servic
     github.close_pr.assert_called_once_with("owner", "repo", 5,
         comment="Issue reopened. Closing this PR in favor of a fresh one.")
 
-    # Verify fresh state: new PR, branch cleared and regenerated
+    # Verify fresh state: no PR yet (planning posts plan to issue, not PR), branch regenerated
     issue = await db.get_issue("owner", "repo", 1)
     assert issue.phase == "plan_review"
-    assert issue.pr_number == 15  # New PR
+    assert issue.pr_number is None  # No new PR during planning — PR created during implementation
     assert issue.issue_closed_seen is False  # Reset
 
     # Verify force=True was used for branch

@@ -49,10 +49,23 @@ class ImplementationHandler:
             commit_msg = f"fix: address review feedback for issue #{issue.issue_number}"
         await self.workspace_mgr.commit_and_push(workspace, issue.branch_name, commit_msg)
 
-        await self.github.mark_pr_ready(issue.repo_owner, issue.repo_name, issue.pr_number)
+        pr_number = issue.pr_number
+        if not pr_number:
+            pr_number = await self.github.create_pr(
+                issue.repo_owner, issue.repo_name,
+                title=f"[Agent] {issue.title}",
+                body=f"Closes #{issue.issue_number}\n\nImplementation of the approved plan.",
+                branch=issue.branch_name, draft=False,
+            )
+            await self.db.update_issue_pr(issue.id, pr_number)
+            if self.audit:
+                await self.audit.log(
+                    "github_api", "create_pr", issue_id=issue.id,
+                    detail={"pr_number": pr_number}, success=True,
+                )
 
         await self.github.post_comment(
-            issue.repo_owner, issue.repo_name, issue.pr_number,
+            issue.repo_owner, issue.repo_name, pr_number,
             "Implementation complete. Please review the code and comment with feedback.",
         )
 

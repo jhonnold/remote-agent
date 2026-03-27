@@ -60,24 +60,21 @@ class PlanningHandler:
         plan_commit = await self.workspace_mgr.get_head_commit(workspace)
         await self.db.set_plan_commit_hash(issue.id, plan_commit)
 
-        pr_number = issue.pr_number
-        if not pr_number:
-            pr_number = await self.github.create_pr(
-                issue.repo_owner, issue.repo_name,
-                title=f"[Agent] Plan for: {issue.title}",
-                body=f"Plan for #{issue.issue_number}. Review the plan file and comment with feedback.",
-                branch=branch, draft=True,
-            )
-            await self.db.update_issue_pr(issue.id, pr_number)
-            if self.audit:
-                await self.audit.log(
-                    "github_api", "create_pr", issue_id=issue.id,
-                    detail={"pr_number": pr_number}, success=True,
-                )
+        # Read the plan content to post as issue comment
+        # The plan file should always exist after commit_and_push above.
+        # This fallback is defensive and should not be reached in practice.
+        plan_content = plan_path.read_text() if plan_path.exists() else "Plan file created."
+
+        comment_body = (
+            "## Plan\n\n"
+            f"{plan_content}\n\n"
+            "---\n"
+            "*Review the plan above and comment with feedback, or approve to start implementation.*"
+        )
 
         await self.github.post_comment(
-            issue.repo_owner, issue.repo_name, pr_number,
-            "Plan created/updated. Please review the plan file and comment with your feedback.",
+            issue.repo_owner, issue.repo_name, issue.issue_number,
+            comment_body,
         )
 
         logger.info("Completed planning for issue %d", issue.id)

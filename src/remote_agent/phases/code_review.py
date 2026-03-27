@@ -52,8 +52,12 @@ class CodeReviewHandler:
 
         elif interpretation.intent == "back_to_planning":
             await self.db.set_plan_approved(issue.id, False)
-            await self.github.mark_pr_draft(issue.repo_owner, issue.repo_name, issue.pr_number)
-            if issue.plan_commit_hash:
+            await self.github.close_pr(
+                issue.repo_owner, issue.repo_name, issue.pr_number,
+                comment="Going back to planning. Will create a new PR after re-implementation.",
+            )
+            await self.db.update_issue_pr(issue.id, None)
+            if issue.plan_commit_hash and issue.workspace_path:
                 await self.workspace_mgr.reset_to_commit(
                     issue.workspace_path, issue.plan_commit_hash, issue.branch_name,
                 )
