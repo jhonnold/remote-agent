@@ -126,7 +126,9 @@ Append-only JSON lines file. Path configurable via `config.logging.audit_file` (
 - Opens a persistent file handle; `close()` flushes and closes it
 - `close()` called in `main.py`'s `finally` block alongside `db.close()`
 
-**`async log(category, action, *, issue_id=None, event_id=None, detail=None, duration_ms=None, success, error_message=None)`**:
+**`async log(category, action, *, issue_id=None, event_id=None, detail=None, duration_ms=None, success, error_message=None)`**
+
+`success` has no default — it is a required keyword argument. Callers must explicitly pass `success=True` or `success=False`. This prevents accidentally omitting the success/failure signal on audit records.
 - Reads `current_issue_id` and `current_event_id` from ContextVars as defaults when not passed explicitly (using `.get(None)`)
 - **Write order: file first, then DB.** If file write fails, raises before DB write occurs. If DB write fails, the file (authoritative archive) still has the record. One-directional partial failure, recoverable.
 - File writes are synchronous appends (single line, flushed immediately). Analogous to `WorkspaceManager.cleanup()` being intentionally synchronous.
@@ -178,7 +180,7 @@ Append-only JSON lines file. Path configurable via `config.logging.audit_file` (
 ### `dispatcher.py`
 - Existing `INFO` for event processing — kept as-is
 - `INFO`: "Recovered {n} interrupted issues on startup" — summary after the existing per-issue WARNINGs
-- `DEBUG`: "Fetched {n} events to process" — only when `n > 0`
+- `DEBUG`: "Fetched {n} events to process" — logged unconditionally (including `n=0`) so that DEBUG users can confirm the poll loop is alive
 - Existing `WARNING`/`exception` on event processing failure — kept
 
 ### `poller.py`
@@ -191,7 +193,7 @@ Append-only JSON lines file. Path configurable via `config.logging.audit_file` (
 - Phase handlers make audit calls for key domain actions
 
 ### `main.py`
-- `run()` uses two-phase logging setup: (1) call `logging.basicConfig(level=logging.INFO)` at the top for minimal console logging during startup, then (2) after `create_app()` returns, call `setup_logging(config)` to reconfigure with JSON formatting, file handler, and config-driven level. This resolves the chicken-and-egg problem where `config` is not available until after `create_app()`.
+- `run()` uses two-phase logging setup: (1) call `logging.basicConfig(level=logging.INFO)` at the top with only a `StreamHandler` — no file handler — for minimal console logging during startup; then (2) after `create_app()` returns, call `setup_logging(config)` which removes the bootstrap handler and installs the JSON formatter, rotating file handler, and config-driven level. This resolves the chicken-and-egg problem where `config` is not available until after `create_app()`.
 - Existing startup and shutdown INFO logs — kept as-is
 - `AuditLogger.close()` called in the `finally` block alongside `db.close()`
 
