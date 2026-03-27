@@ -44,7 +44,7 @@ async def test_planning_creates_branch_and_pr(handler, deps, new_issue, new_issu
     result = await handler.handle(new_issue, new_issue_event)
 
     assert result.next_phase == "plan_review"
-    deps["workspace_mgr"].ensure_branch.assert_called_once()
+    deps["workspace_mgr"].ensure_branch.assert_called_once_with("/tmp/ws", "agent/issue-42", force=True)
     deps["github"].create_pr.assert_called_once()
     deps["db"].update_issue_pr.assert_called_once_with(1, 10)
     deps["db"].set_plan_commit_hash.assert_called_once()
@@ -66,6 +66,26 @@ async def test_planning_revision_reuses_existing_pr(handler, deps, new_issue_eve
 
     assert result.next_phase == "plan_review"
     deps["github"].create_pr.assert_not_called()  # PR already exists
+
+
+async def test_planning_after_reopen_uses_force_branch(handler, deps):
+    """After reopen, branch_name is None — ensure_branch should use force=True."""
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="Need OAuth2", phase="planning",
+                  branch_name=None)  # Cleared by reopen
+    event = Event(id=3, issue_id=1, event_type="new_issue",
+                  payload={"number": 42, "title": "Add auth", "body": "Need OAuth2"})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["workspace_mgr"].get_head_commit.return_value = "abc123"
+    deps["agent_service"].run_planning.return_value = AgentResult(
+        success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
+    )
+    deps["github"].create_pr.return_value = 20
+
+    result = await handler.handle(issue, event)
+
+    assert result.next_phase == "plan_review"
+    deps["workspace_mgr"].ensure_branch.assert_called_once_with("/tmp/ws", "agent/issue-42", force=True)
 
 
 async def test_planning_audit_records(deps, new_issue, new_issue_event):

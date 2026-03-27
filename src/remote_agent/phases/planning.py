@@ -30,7 +30,8 @@ class PlanningHandler:
         await self.db.update_issue_workspace(issue.id, workspace)
 
         branch = issue.branch_name or f"agent/issue-{issue.issue_number}"
-        await self.workspace_mgr.ensure_branch(workspace, branch)
+        force = issue.branch_name is None
+        await self.workspace_mgr.ensure_branch(workspace, branch, force=force)
         await self.db.update_issue_branch(issue.id, branch)
 
         # Read existing plan if revision
