@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+
+# Project runtime
+data/
+*.db
+remote-agent.log
+remote-agent.log.*
+
+# OS
+.DS_Store
+
+# Local Claude config
+.claude.local.md
