@@ -37,7 +37,15 @@ class WorkspaceManager:
             await self._run_git(["pull"], cwd=str(path))
         return str(path)
 
-    async def ensure_branch(self, workspace: str, branch: str) -> None:
+    async def ensure_branch(self, workspace: str, branch: str, *, force: bool = False) -> None:
+        if force:
+            try:
+                await self._run_git(["push", "origin", "--delete", branch], cwd=workspace)
+            except GitError:
+                pass
+            await self._run_git(["checkout", "-B", branch], cwd=workspace)
+            logger.info("Force-created branch %s", branch)
+            return
         try:
             await self._run_git(["checkout", branch], cwd=workspace)
             await self._run_git(["pull", "origin", branch], cwd=workspace)

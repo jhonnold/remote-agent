@@ -66,6 +66,22 @@ async def test_commit_and_push_no_changes_skips_commit(mock_git, workspace_mgr):
     assert mock_git.call_count == 3  # No commit call
 
 
+@patch("remote_agent.workspace.WorkspaceManager._run_git")
+async def test_ensure_branch_force_deletes_remote_and_creates(mock_git, workspace_mgr):
+    mock_git.return_value = ""  # All git calls succeed
+    await workspace_mgr.ensure_branch("/tmp/ws", "agent/issue-42", force=True)
+    calls = [c[0][0] for c in mock_git.call_args_list]
+    assert calls[0] == ["push", "origin", "--delete", "agent/issue-42"]
+    assert calls[1] == ["checkout", "-B", "agent/issue-42"]
+
+
+@patch("remote_agent.workspace.WorkspaceManager._run_git")
+async def test_ensure_branch_force_ignores_missing_remote(mock_git, workspace_mgr):
+    mock_git.side_effect = [GitError("remote branch not found"), ""]  # delete fails, checkout succeeds
+    await workspace_mgr.ensure_branch("/tmp/ws", "agent/issue-42", force=True)
+    assert mock_git.call_count == 2  # Still tried checkout -B
+
+
 def test_cleanup(workspace_mgr, tmp_path):
     ws_path = tmp_path / "owner" / "repo" / "issue-42"
     ws_path.mkdir(parents=True)
