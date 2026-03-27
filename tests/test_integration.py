@@ -1,4 +1,5 @@
 # tests/test_integration.py
+import json
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from remote_agent.db import Database
@@ -6,6 +7,7 @@ from remote_agent.poller import Poller
 from remote_agent.dispatcher import Dispatcher
 from remote_agent.config import Config, RepoConfig, PollingConfig, TriggerConfig, WorkspaceConfig, DatabaseConfig, AgentConfig, LoggingConfig
 from remote_agent.agent import AgentResult, CommentInterpretation
+from remote_agent.audit import AuditLogger
 
 
 @pytest.fixture
@@ -46,10 +48,22 @@ def workspace_mgr():
     return mgr
 
 
-async def test_full_lifecycle_happy_path(config, db, github, agent_service, workspace_mgr):
+@pytest.fixture
+async def audit(db, tmp_path):
+    a = AuditLogger(db, str(tmp_path / "audit.jsonl"))
+    yield a
+    a.close()
+
+
+@pytest.fixture
+def audit_file(tmp_path):
+    return tmp_path / "audit.jsonl"
+
+
+async def test_full_lifecycle_happy_path(config, db, github, agent_service, workspace_mgr, audit, audit_file):
     """Test: new issue -> planning -> plan_review -> approve -> implementing -> code_review -> approve -> completed"""
     poller = Poller(config, db, github)
-    dispatcher = Dispatcher(config, db, github, agent_service, workspace_mgr)
+    dispatcher = Dispatcher(config, db, github, agent_service, workspace_mgr, audit=audit)
     # Override dispatcher handlers to use our mocks
     dispatcher._planning.agent_service = agent_service
     dispatcher._planning.workspace_mgr = workspace_mgr
@@ -122,3 +136,20 @@ async def test_full_lifecycle_happy_path(config, db, github, agent_service, work
 
     issue = await db.get_issue("owner", "repo", 1)
     assert issue.phase == "completed"
+
+    # Verify audit trail
+    audit_lines = audit_file.read_text().strip().split("\n")
+    audit_records = [json.loads(line) for line in audit_lines]
+    categories_and_actions = [(r["category"], r["action"]) for r in audit_records]
+
+    # Should have phase transition records for the full lifecycle (spec requires all 5)
+    assert ("phase_transition", "plan_review") in categories_and_actions
+    assert ("phase_transition", "implementing") in categories_and_actions
+    assert ("phase_transition", "code_review") in categories_and_actions
+    assert ("phase_transition", "completed") in categories_and_actions
+
+    # Should also have comment classification records
+    assert ("comment_classification", "approve") in categories_and_actions
+
+    # All records should be successful
+    assert all(r["success"] for r in audit_records)
