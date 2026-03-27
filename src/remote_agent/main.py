@@ -2,7 +2,6 @@
 from __future__ import annotations
 import asyncio
 import logging
-import logging.handlers
 from dataclasses import dataclass
 
 from remote_agent.config import load_config, Config
@@ -38,18 +37,14 @@ async def create_app(config_path: str = "config.yaml") -> App:
 
 
 async def run(config_path: str = "config.yaml"):
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.handlers.RotatingFileHandler(
-                "remote-agent.log", maxBytes=10_000_000, backupCount=3,
-            ),
-        ],
-    )
+    # Phase 1: minimal console logging until config is available
+    logging.basicConfig(level=logging.INFO)
 
     app = await create_app(config_path)
+
+    # Phase 2: reconfigure with structured JSON logging
+    from remote_agent.logging_config import setup_logging
+    setup_logging(app.config)
 
     logger.info("Remote agent started. Polling %d repos every %ds.",
                 len(app.config.repos), app.config.polling.interval_seconds)
