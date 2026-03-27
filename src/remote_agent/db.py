@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS issues (
     plan_commit_hash TEXT,
     last_comment_id INTEGER DEFAULT 0,
     last_review_id INTEGER DEFAULT 0,
+    issue_closed_seen INTEGER DEFAULT 0,
+    last_issue_comment_id INTEGER DEFAULT 0,
     budget_notified INTEGER DEFAULT 0,
     error_message TEXT,
     created_at TEXT DEFAULT (datetime('now')),
@@ -90,6 +92,16 @@ class Database:
             await conn.commit()
         except Exception:
             pass  # Column already exists
+        try:
+            await conn.execute("ALTER TABLE issues ADD COLUMN issue_closed_seen INTEGER DEFAULT 0")
+            await conn.commit()
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE issues ADD COLUMN last_issue_comment_id INTEGER DEFAULT 0")
+            await conn.commit()
+        except Exception:
+            pass
         return cls(conn)
 
     async def close(self):
@@ -208,6 +220,41 @@ class Database:
         )
         await self._conn.commit()
         logger.debug("Updated issue %d last_comment_id=%d", issue_id, comment_id)
+
+    async def mark_issue_closed(self, issue_id: int, last_issue_comment_id: int):
+        await self._conn.execute(
+            "UPDATE issues SET issue_closed_seen = 1, last_issue_comment_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (last_issue_comment_id, issue_id),
+        )
+        await self._conn.commit()
+        logger.debug("Marked issue %d as closed (last_issue_comment_id=%d)", issue_id, last_issue_comment_id)
+
+    async def clear_issue_for_reopen(self, issue_id: int):
+        await self._conn.execute(
+            """UPDATE issues SET pr_number = NULL, branch_name = NULL, plan_commit_hash = NULL,
+               workspace_path = NULL, last_comment_id = 0, last_review_id = 0,
+               issue_closed_seen = 0, last_issue_comment_id = 0, updated_at = datetime('now')
+               WHERE id = ?""",
+            (issue_id,),
+        )
+        await self._conn.commit()
+        logger.debug("Cleared issue %d for reopen", issue_id)
+
+    async def get_completed_or_error_issues(self, repo_owner: str, repo_name: str) -> list[Issue]:
+        cursor = await self._conn.execute(
+            "SELECT * FROM issues WHERE repo_owner = ? AND repo_name = ? AND phase IN ('completed', 'error')",
+            (repo_owner, repo_name),
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_issue(r) for r in rows]
+
+    async def update_last_issue_comment_id(self, issue_id: int, comment_id: int):
+        await self._conn.execute(
+            "UPDATE issues SET last_issue_comment_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (comment_id, issue_id),
+        )
+        await self._conn.commit()
+        logger.debug("Updated issue %d last_issue_comment_id=%d", issue_id, comment_id)
 
     # --- Events ---
 
@@ -345,6 +392,8 @@ class Database:
             workspace_path=row["workspace_path"], plan_approved=bool(row["plan_approved"]),
             plan_commit_hash=row["plan_commit_hash"], last_comment_id=row["last_comment_id"],
             last_review_id=row["last_review_id"],
+            issue_closed_seen=bool(row["issue_closed_seen"]),
+            last_issue_comment_id=row["last_issue_comment_id"],
             budget_notified=bool(row["budget_notified"]), error_message=row["error_message"],
             created_at=row["created_at"], updated_at=row["updated_at"],
         )

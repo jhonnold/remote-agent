@@ -19,6 +19,8 @@ class Issue:
     plan_commit_hash: str | None = None
     last_comment_id: int = 0
     last_review_id: int = 0
+    issue_closed_seen: bool = False
+    last_issue_comment_id: int = 0
     budget_notified: bool = False
     error_message: str | None = None
     created_at: str | None = None

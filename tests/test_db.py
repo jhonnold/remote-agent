@@ -116,3 +116,64 @@ async def test_create_review_events(db):
     assert all(e.event_type == "new_comment" for e in events)
     issue = await db.get_issue("o", "r", 1)
     assert issue.last_review_id == 501
+
+
+async def test_issue_has_closed_seen_and_issue_comment_fields(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.issue_closed_seen is False
+    assert issue.last_issue_comment_id == 0
+
+
+async def test_mark_issue_closed(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "completed")
+    await db.mark_issue_closed(issue_id, last_issue_comment_id=500)
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.issue_closed_seen is True
+    assert issue.last_issue_comment_id == 500
+
+
+async def test_clear_issue_for_reopen(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    await db.update_issue_phase(issue_id, "completed")
+    await db.update_issue_pr(issue_id, 10)
+    await db.update_issue_branch(issue_id, "agent/issue-1")
+    await db.set_plan_commit_hash(issue_id, "abc123")
+    await db.update_issue_workspace(issue_id, "/tmp/ws")
+    await db.update_last_comment_id(issue_id, 100)
+    await db.mark_issue_closed(issue_id, last_issue_comment_id=500)
+
+    await db.clear_issue_for_reopen(issue_id)
+
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.pr_number is None
+    assert issue.branch_name is None
+    assert issue.plan_commit_hash is None
+    assert issue.workspace_path is None
+    assert issue.last_comment_id == 0
+    assert issue.last_review_id == 0
+    assert issue.issue_closed_seen is False
+    assert issue.last_issue_comment_id == 0
+
+
+async def test_get_completed_or_error_issues(db):
+    id1 = await db.create_issue("o", "r", {"number": 1, "title": "T1", "body": ""})
+    id2 = await db.create_issue("o", "r", {"number": 2, "title": "T2", "body": ""})
+    id3 = await db.create_issue("o", "r", {"number": 3, "title": "T3", "body": ""})
+    id4 = await db.create_issue("o", "r", {"number": 4, "title": "T4", "body": ""})
+    await db.update_issue_phase(id1, "completed")
+    await db.update_issue_phase(id2, "error")
+    await db.update_issue_phase(id3, "planning")
+    await db.update_issue_phase(id4, "completed")
+    issues = await db.get_completed_or_error_issues("o", "r")
+    assert len(issues) == 3
+    phases = {i.phase for i in issues}
+    assert phases == {"completed", "error"}
+
+
+async def test_update_last_issue_comment_id(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    await db.update_last_issue_comment_id(issue_id, 999)
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.last_issue_comment_id == 999
