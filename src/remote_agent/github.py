@@ -118,6 +118,11 @@ class GitHubService:
     async def mark_pr_draft(self, owner: str, repo: str, pr_number: int) -> None:
         await self._run_gh(["pr", "ready", str(pr_number), "--repo", f"{owner}/{repo}", "--undo"])
 
+    async def close_pr(self, owner: str, repo: str, pr_number: int, comment: str | None = None) -> None:
+        if comment:
+            await self.post_comment(owner, repo, pr_number, comment)
+        await self._run_gh(["pr", "close", str(pr_number), "--repo", f"{owner}/{repo}"])
+
     async def post_comment(self, owner: str, repo: str, number: int, body: str) -> None:
         await self._run_gh([
             "issue", "comment", str(number),

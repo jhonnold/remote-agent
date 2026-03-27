@@ -131,3 +131,10 @@ async def test_get_pr_reviews_returns_state(mock_exec, github):
     assert len(result) == 2
     assert result[0]["state"] == "DISMISSED"
     assert result[1]["state"] == "APPROVED"
+
+
+@patch("asyncio.create_subprocess_exec")
+async def test_close_pr(mock_exec, github):
+    mock_exec.return_value = _make_process_mock()
+    await github.close_pr("owner", "repo", 42, comment="Closing old PR")
+    assert mock_exec.call_count == 2  # comment + close
