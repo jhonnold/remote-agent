@@ -1,6 +1,7 @@
 # Remote Agent - Claude Code Context
 
 ## Commands
+- **Requires**: `ANTHROPIC_API_KEY` env var and a configured `config.yaml`
 - `python3 -m remote_agent.main` - run the agent (not `python`)
 - `pytest` or `pytest -v` - run all tests
 - `pytest tests/test_integration.py -v` - full lifecycle integration test
@@ -11,7 +12,7 @@
 - **State machine**: new -> planning -> plan_review -> implementing -> code_review -> completed
 - **All GitHub ops**: via `gh` CLI subprocess (`github.py`), never httpx/REST
 - **All AI ops**: via `claude-agent-sdk` query() in `agent.py` - sole module importing the SDK
-- To add a new phase: create handler in `phases/`, add to dispatcher's `__init__` and `_get_handler`
+- To add a new phase: extend `PhaseHandler` in `phases/base.py`, add to dispatcher's `__init__` and `_get_handler`
 
 ## Code Patterns
 - `from __future__ import annotations` in all modules for `str | None` syntax
