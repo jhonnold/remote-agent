@@ -76,3 +76,58 @@ async def test_detect_default_branch(mock_exec, github):
     branch2 = await github.detect_default_branch("owner", "repo")
     assert branch2 == "main"
     assert mock_exec.call_count == 1  # Cached
+
+
+@patch("asyncio.create_subprocess_exec")
+async def test_get_pr_reviews(mock_exec, github):
+    reviews = [
+        {
+            "id": 500,
+            "body": "Needs changes",
+            "state": "CHANGES_REQUESTED",
+            "user": {"login": "user1"},
+            "submitted_at": "2026-01-01T00:00:00Z",
+        }
+    ]
+    mock_exec.return_value = _make_process_mock(stdout=json.dumps(reviews))
+    result = await github.get_pr_reviews("owner", "repo", 5)
+    assert len(result) == 1
+    assert result[0]["id"] == 500
+    assert result[0]["author"] == "user1"
+    assert result[0]["state"] == "CHANGES_REQUESTED"
+    assert result[0]["body"] == "Needs changes"
+
+
+@patch("asyncio.create_subprocess_exec")
+async def test_get_pr_review_comments(mock_exec, github):
+    comments = [
+        {
+            "id": 900,
+            "body": "use X here",
+            "path": "src/foo.js",
+            "line": 42,
+            "user": {"login": "user1"},
+            "pull_request_review_id": 500,
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+    ]
+    mock_exec.return_value = _make_process_mock(stdout=json.dumps(comments))
+    result = await github.get_pr_review_comments("owner", "repo", 5)
+    assert len(result) == 1
+    assert result[0]["id"] == 900
+    assert result[0]["path"] == "src/foo.js"
+    assert result[0]["line"] == 42
+    assert result[0]["review_id"] == 500
+
+
+@patch("asyncio.create_subprocess_exec")
+async def test_get_pr_reviews_returns_state(mock_exec, github):
+    reviews = [
+        {"id": 1, "body": "", "state": "DISMISSED", "user": {"login": "u"}, "submitted_at": ""},
+        {"id": 2, "body": "ok", "state": "APPROVED", "user": {"login": "u"}, "submitted_at": ""},
+    ]
+    mock_exec.return_value = _make_process_mock(stdout=json.dumps(reviews))
+    result = await github.get_pr_reviews("owner", "repo", 5)
+    assert len(result) == 2
+    assert result[0]["state"] == "DISMISSED"
+    assert result[1]["state"] == "APPROVED"

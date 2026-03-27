@@ -63,6 +63,40 @@ class GitHubService:
             for c in raw_comments
         ]
 
+    async def get_pr_reviews(self, owner: str, repo: str, pr_number: int) -> list[dict]:
+        output = await self._run_gh([
+            "api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+        ])
+        raw_reviews = json.loads(output) if output.strip() else []
+        return [
+            {
+                "id": r["id"],
+                "body": r.get("body", ""),
+                "state": r["state"],
+                "author": r["user"]["login"],
+                "submitted_at": r.get("submitted_at", ""),
+            }
+            for r in raw_reviews
+        ]
+
+    async def get_pr_review_comments(self, owner: str, repo: str, pr_number: int) -> list[dict]:
+        output = await self._run_gh([
+            "api", f"repos/{owner}/{repo}/pulls/{pr_number}/comments",
+        ])
+        raw_comments = json.loads(output) if output.strip() else []
+        return [
+            {
+                "id": c["id"],
+                "body": c.get("body", ""),
+                "path": c.get("path", ""),
+                "line": c.get("line") or c.get("original_line"),
+                "author": c["user"]["login"],
+                "review_id": c.get("pull_request_review_id"),
+                "created_at": c.get("created_at", ""),
+            }
+            for c in raw_comments
+        ]
+
     async def create_pr(self, owner: str, repo: str, title: str,
                          body: str, branch: str, draft: bool = False) -> int:
         args = [
