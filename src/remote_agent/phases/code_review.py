@@ -13,11 +13,13 @@ logger = logging.getLogger(__name__)
 
 class CodeReviewHandler:
     def __init__(self, db: Database, github: GitHubService,
-                 agent_service: AgentService, workspace_mgr: WorkspaceManager):
+                 agent_service: AgentService, workspace_mgr: WorkspaceManager,
+                 audit=None):
         self.db = db
         self.github = github
         self.agent_service = agent_service
         self.workspace_mgr = workspace_mgr
+        self.audit = audit
 
     async def handle(self, issue: Issue, event: Event) -> PhaseResult:
         comment_body = event.payload.get("body", "")
@@ -27,6 +29,11 @@ class CodeReviewHandler:
             issue_title=issue.title, issue_id=issue.id,
         )
         logger.info("Code review comment interpreted as: %s", interpretation.intent)
+        if self.audit:
+            await self.audit.log(
+                "comment_classification", interpretation.intent,
+                issue_id=issue.id, success=True,
+            )
 
         if interpretation.intent == "approve":
             await self.github.post_comment(
@@ -34,6 +41,9 @@ class CodeReviewHandler:
                 "Code approved! The PR is ready for you to merge.",
             )
             self.workspace_mgr.cleanup(issue.repo_owner, issue.repo_name, issue.issue_number)
+            if self.audit:
+                await self.audit.log("phase_transition", "completed",
+                                      issue_id=issue.id, success=True)
             return PhaseResult(next_phase="completed")
 
         elif interpretation.intent == "revise":

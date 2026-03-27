@@ -28,10 +28,10 @@ class Dispatcher:
         self.db = db
         self.github = github
         self.audit = audit
-        self._planning = PlanningHandler(db, github, agent_service, workspace_mgr)
-        self._plan_review = PlanReviewHandler(db, github, agent_service)
-        self._implementation = ImplementationHandler(db, github, agent_service, workspace_mgr)
-        self._code_review = CodeReviewHandler(db, github, agent_service, workspace_mgr)
+        self._planning = PlanningHandler(db, github, agent_service, workspace_mgr, audit=audit)
+        self._plan_review = PlanReviewHandler(db, github, agent_service, audit=audit)
+        self._implementation = ImplementationHandler(db, github, agent_service, workspace_mgr, audit=audit)
+        self._code_review = CodeReviewHandler(db, github, agent_service, workspace_mgr, audit=audit)
 
     async def process_events(self):
         events = await self.db.get_unprocessed_events()

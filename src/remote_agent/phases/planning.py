@@ -14,13 +14,16 @@ logger = logging.getLogger(__name__)
 
 class PlanningHandler:
     def __init__(self, db: Database, github: GitHubService,
-                 agent_service: AgentService, workspace_mgr: WorkspaceManager):
+                 agent_service: AgentService, workspace_mgr: WorkspaceManager,
+                 audit=None):
         self.db = db
         self.github = github
         self.agent_service = agent_service
         self.workspace_mgr = workspace_mgr
+        self.audit = audit
 
     async def handle(self, issue: Issue, event: Event) -> PhaseResult:
+        logger.info("Handling planning for issue %d", issue.id)
         workspace = await self.workspace_mgr.ensure_workspace(
             issue.repo_owner, issue.repo_name, issue.issue_number,
         )
@@ -65,10 +68,19 @@ class PlanningHandler:
                 branch=branch, draft=True,
             )
             await self.db.update_issue_pr(issue.id, pr_number)
+            if self.audit:
+                await self.audit.log(
+                    "github_api", "create_pr", issue_id=issue.id,
+                    detail={"pr_number": pr_number}, success=True,
+                )
 
         await self.github.post_comment(
             issue.repo_owner, issue.repo_name, pr_number,
             "Plan created/updated. Please review the plan file and comment with your feedback.",
         )
 
+        logger.info("Completed planning for issue %d", issue.id)
+        if self.audit:
+            await self.audit.log("phase_transition", "plan_review",
+                                  issue_id=issue.id, success=True)
         return PhaseResult(next_phase="plan_review")

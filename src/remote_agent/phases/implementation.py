@@ -14,13 +14,16 @@ logger = logging.getLogger(__name__)
 
 class ImplementationHandler:
     def __init__(self, db: Database, github: GitHubService,
-                 agent_service: AgentService, workspace_mgr: WorkspaceManager):
+                 agent_service: AgentService, workspace_mgr: WorkspaceManager,
+                 audit=None):
         self.db = db
         self.github = github
         self.agent_service = agent_service
         self.workspace_mgr = workspace_mgr
+        self.audit = audit
 
     async def handle(self, issue: Issue, event: Event) -> PhaseResult:
+        logger.info("Handling implementation for issue %d", issue.id)
         workspace = await self.workspace_mgr.ensure_workspace(
             issue.repo_owner, issue.repo_name, issue.issue_number,
         )
@@ -53,4 +56,8 @@ class ImplementationHandler:
             "Implementation complete. Please review the code and comment with feedback.",
         )
 
+        logger.info("Completed implementation for issue %d", issue.id)
+        if self.audit:
+            await self.audit.log("phase_transition", "code_review",
+                                  issue_id=issue.id, success=True)
         return PhaseResult(next_phase="code_review")

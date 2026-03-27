@@ -11,10 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 class PlanReviewHandler:
-    def __init__(self, db: Database, github: GitHubService, agent_service: AgentService):
+    def __init__(self, db: Database, github: GitHubService, agent_service: AgentService,
+                 audit=None):
         self.db = db
         self.github = github
         self.agent_service = agent_service
+        self.audit = audit
 
     async def handle(self, issue: Issue, event: Event) -> PhaseResult:
         comment_body = event.payload.get("body", "")
@@ -24,6 +26,11 @@ class PlanReviewHandler:
             issue_title=issue.title, issue_id=issue.id,
         )
         logger.info("Plan review comment interpreted as: %s", interpretation.intent)
+        if self.audit:
+            await self.audit.log(
+                "comment_classification", interpretation.intent,
+                issue_id=issue.id, success=True,
+            )
 
         if interpretation.intent == "approve":
             await self.db.set_plan_approved(issue.id, True)
@@ -33,6 +40,9 @@ class PlanReviewHandler:
             )
             # Create event to drive the implementation handler
             await self.db.create_event(issue.id, "revision_requested", {})
+            if self.audit:
+                await self.audit.log("phase_transition", "implementing",
+                                      issue_id=issue.id, success=True)
             return PhaseResult(next_phase="implementing")
 
         elif interpretation.intent == "revise":
