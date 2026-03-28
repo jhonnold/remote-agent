@@ -1,7 +1,37 @@
 # tests/test_prompts.py
+from remote_agent.prompts.designing import build_designing_system_prompt, build_designing_user_prompt
 from remote_agent.prompts.planning import build_planning_system_prompt, build_planning_user_prompt
 from remote_agent.prompts.implementation import build_implementation_system_prompt, build_implementation_user_prompt
 from remote_agent.prompts.review import build_review_system_prompt, build_review_user_prompt
+
+
+def test_designing_system_prompt_contains_key_instructions():
+    prompt = build_designing_system_prompt()
+    assert "architect" in prompt.lower()
+    assert "codebase-explorer" in prompt or "codebase_explorer" in prompt
+    assert "issue-advocate" in prompt or "issue_advocate" in prompt
+    assert "design-critic" in prompt or "design_critic" in prompt
+    assert "2-3 approaches" in prompt or "two to three" in prompt.lower()
+
+
+def test_designing_user_prompt_new_issue():
+    prompt = build_designing_user_prompt(
+        issue_number=42, issue_title="Add auth", issue_body="Need OAuth2",
+    )
+    assert "#42" in prompt
+    assert "Add auth" in prompt
+    assert "Need OAuth2" in prompt
+    assert "issue-42-design.md" in prompt
+
+
+def test_designing_user_prompt_revision():
+    prompt = build_designing_user_prompt(
+        issue_number=42, issue_title="Add auth", issue_body="Need OAuth2",
+        existing_design="## Old design", feedback="Change the approach",
+    )
+    assert "Change the approach" in prompt
+    assert "Old design" in prompt
+    assert "Revision" in prompt or "revision" in prompt
 
 
 def test_planning_system_prompt_contains_key_instructions():
