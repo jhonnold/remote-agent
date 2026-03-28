@@ -1,14 +1,25 @@
 # tests/test_phases/test_planning.py
+from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+
 from remote_agent.phases.planning import PlanningHandler
 from remote_agent.models import Issue, Event, PhaseResult
 from remote_agent.agent import AgentResult
 
 
 @pytest.fixture
-def deps():
+def config():
+    cfg = MagicMock()
+    cfg.workspace.base_dir = "/tmp/workspaces"
+    return cfg
+
+
+@pytest.fixture
+def deps(config):
     return {
+        "config": config,
         "db": AsyncMock(),
         "github": AsyncMock(),
         "agent_service": AsyncMock(),
@@ -18,92 +29,144 @@ def deps():
 
 @pytest.fixture
 def handler(deps):
-    return PlanningHandler(deps["db"], deps["github"], deps["agent_service"], deps["workspace_mgr"])
+    return PlanningHandler(
+        deps["config"], deps["db"], deps["github"],
+        deps["agent_service"], deps["workspace_mgr"],
+    )
 
 
 @pytest.fixture
-def new_issue():
-    return Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
-                 title="Add auth", body="Need OAuth2", phase="new")
+def planning_issue():
+    return Issue(
+        id=1, repo_owner="o", repo_name="r", issue_number=42,
+        title="Add auth", body="Need OAuth2", phase="planning",
+        branch_name="agent/issue-42", design_approved=True,
+    )
 
 
 @pytest.fixture
-def new_issue_event():
-    return Event(id=1, issue_id=1, event_type="new_issue",
-                 payload={"number": 42, "title": "Add auth", "body": "Need OAuth2"})
+def planning_event():
+    return Event(id=1, issue_id=1, event_type="revision_requested", payload={})
 
 
-async def test_planning_creates_branch_and_pr(handler, deps, new_issue, new_issue_event):
-    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
-    deps["workspace_mgr"].get_head_commit.return_value = "abc123"
-    deps["agent_service"].run_planning.return_value = AgentResult(
-        success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
-    )
-    deps["github"].create_pr.return_value = 10
+async def test_planning_reads_design_and_saves_plan_to_temp(handler, deps, planning_issue, planning_event, tmp_path):
+    workspace = str(tmp_path / "ws")
+    deps["workspace_mgr"].ensure_workspace.return_value = workspace
 
-    result = await handler.handle(new_issue, new_issue_event)
+    # Create design doc in workspace
+    design_dir = Path(workspace) / "docs" / "plans"
+    design_dir.mkdir(parents=True, exist_ok=True)
+    design_file = design_dir / "issue-42-design.md"
+    design_file.write_text("# Design\nOAuth2 flow")
 
-    assert result.next_phase == "plan_review"
-    deps["workspace_mgr"].ensure_branch.assert_called_once_with("/tmp/ws", "agent/issue-42", force=True)
-    deps["github"].create_pr.assert_called_once()
-    deps["db"].update_issue_pr.assert_called_once_with(1, 10)
-    deps["db"].set_plan_commit_hash.assert_called_once()
+    # Agent writes plan file during run
+    async def fake_run_planning(**kwargs):
+        plan_dir = Path(kwargs["cwd"]) / "docs" / "plans"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        (plan_dir / "issue-42-plan.md").write_text("# Plan\nStep 1: Implement OAuth2")
+        return AgentResult(
+            success=True, session_id="sess-1", cost_usd=1.0,
+            input_tokens=100, output_tokens=200,
+        )
+
+    deps["agent_service"].run_planning.side_effect = fake_run_planning
+
+    result = await handler.handle(planning_issue, planning_event)
+
+    # Verify design_content was passed to run_planning
+    call_kwargs = deps["agent_service"].run_planning.call_args.kwargs
+    assert call_kwargs["design_content"] == "# Design\nOAuth2 flow"
+    # No existing_plan or feedback params
+    assert "existing_plan" not in call_kwargs
+    assert "feedback" not in call_kwargs
+
+    # Verify plan_path stored on issue
+    deps["db"].set_plan_path.assert_called_once()
+    plan_path = deps["db"].set_plan_path.call_args[0][1]
+    assert "issue-42-plan.md" in plan_path
+    assert ".plans" in plan_path
+    # Plan file should exist at temp location
+    assert Path(plan_path).exists()
+    assert Path(plan_path).read_text() == "# Plan\nStep 1: Implement OAuth2"
+
+    # Plan file should NOT exist in workspace anymore
+    assert not (Path(workspace) / "docs" / "plans" / "issue-42-plan.md").exists()
+
+    # Auto-transition event created
+    deps["db"].create_event.assert_called_once_with(planning_issue.id, "revision_requested", {})
+
+    # NO PR creation
+    deps["github"].create_pr.assert_not_called()
+
+    # NO comment posted
+    deps["github"].post_comment.assert_not_called()
+
+    # next_phase is implementing
+    assert result.next_phase == "implementing"
 
 
-async def test_planning_revision_reuses_existing_pr(handler, deps, new_issue_event):
-    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
-                  title="Add auth", body="Need OAuth2", phase="planning",
-                  pr_number=10, branch_name="agent/issue-42")
-    event = Event(id=2, issue_id=1, event_type="revision_requested",
-                  payload={"body": "Change approach"})
-    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
-    deps["workspace_mgr"].get_head_commit.return_value = "def456"
-    deps["agent_service"].run_planning.return_value = AgentResult(
-        success=True, session_id="sess-2", cost_usd=0.5, input_tokens=50, output_tokens=100,
-    )
+async def test_planning_transitions_automatically(handler, deps, planning_issue, planning_event, tmp_path):
+    workspace = str(tmp_path / "ws")
+    deps["workspace_mgr"].ensure_workspace.return_value = workspace
 
-    result = await handler.handle(issue, event)
+    # Create design doc
+    design_dir = Path(workspace) / "docs" / "plans"
+    design_dir.mkdir(parents=True, exist_ok=True)
+    (design_dir / "issue-42-design.md").write_text("# Design\nSome design")
 
-    assert result.next_phase == "plan_review"
-    deps["github"].create_pr.assert_not_called()  # PR already exists
+    # Agent writes plan
+    async def fake_run_planning(**kwargs):
+        plan_dir = Path(kwargs["cwd"]) / "docs" / "plans"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        (plan_dir / "issue-42-plan.md").write_text("# Plan\nSome plan")
+        return AgentResult(
+            success=True, session_id="sess-2", cost_usd=0.5,
+            input_tokens=50, output_tokens=100,
+        )
 
+    deps["agent_service"].run_planning.side_effect = fake_run_planning
 
-async def test_planning_after_reopen_uses_force_branch(handler, deps):
-    """After reopen, branch_name is None — ensure_branch should use force=True."""
-    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
-                  title="Add auth", body="Need OAuth2", phase="planning",
-                  branch_name=None)  # Cleared by reopen
-    event = Event(id=3, issue_id=1, event_type="new_issue",
-                  payload={"number": 42, "title": "Add auth", "body": "Need OAuth2"})
-    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
-    deps["workspace_mgr"].get_head_commit.return_value = "abc123"
-    deps["agent_service"].run_planning.return_value = AgentResult(
-        success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
-    )
-    deps["github"].create_pr.return_value = 20
+    result = await handler.handle(planning_issue, planning_event)
 
-    result = await handler.handle(issue, event)
-
-    assert result.next_phase == "plan_review"
-    deps["workspace_mgr"].ensure_branch.assert_called_once_with("/tmp/ws", "agent/issue-42", force=True)
+    # Verify next_phase is "implementing" with no human interaction
+    assert result.next_phase == "implementing"
+    deps["github"].create_pr.assert_not_called()
+    deps["github"].post_comment.assert_not_called()
+    # Auto-transition event
+    deps["db"].create_event.assert_called_once_with(planning_issue.id, "revision_requested", {})
 
 
-async def test_planning_audit_records(deps, new_issue, new_issue_event):
+async def test_planning_audit_records(deps, planning_issue, planning_event, tmp_path):
     audit = AsyncMock()
-    handler = PlanningHandler(deps["db"], deps["github"], deps["agent_service"],
-                               deps["workspace_mgr"], audit=audit)
-
-    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
-    deps["workspace_mgr"].get_head_commit.return_value = "abc123"
-    deps["agent_service"].run_planning.return_value = AgentResult(
-        success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
+    handler = PlanningHandler(
+        deps["config"], deps["db"], deps["github"],
+        deps["agent_service"], deps["workspace_mgr"], audit=audit,
     )
-    deps["github"].create_pr.return_value = 10
 
-    result = await handler.handle(new_issue, new_issue_event)
+    workspace = str(tmp_path / "ws")
+    deps["workspace_mgr"].ensure_workspace.return_value = workspace
 
-    assert result.next_phase == "plan_review"
-    # Verify audit was called for PR creation and phase transition
+    # Create design doc
+    design_dir = Path(workspace) / "docs" / "plans"
+    design_dir.mkdir(parents=True, exist_ok=True)
+    (design_dir / "issue-42-design.md").write_text("# Design\nSome design")
+
+    # Agent writes plan
+    async def fake_run_planning(**kwargs):
+        plan_dir = Path(kwargs["cwd"]) / "docs" / "plans"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        (plan_dir / "issue-42-plan.md").write_text("# Plan\nSome plan")
+        return AgentResult(
+            success=True, session_id="sess-1", cost_usd=1.0,
+            input_tokens=100, output_tokens=200,
+        )
+
+    deps["agent_service"].run_planning.side_effect = fake_run_planning
+
+    result = await handler.handle(planning_issue, planning_event)
+
+    assert result.next_phase == "implementing"
+    # Verify audit was called
     assert audit.log.call_count >= 1
     categories = [c.args[0] for c in audit.log.call_args_list]
     assert "phase_transition" in categories

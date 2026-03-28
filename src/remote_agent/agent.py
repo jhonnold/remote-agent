@@ -8,8 +8,15 @@ from dataclasses import dataclass
 from remote_agent.config import Config
 from remote_agent.db import Database
 from remote_agent.exceptions import AgentError
+from remote_agent.prompts.designing import build_designing_system_prompt, build_designing_user_prompt
 from remote_agent.prompts.planning import build_planning_system_prompt, build_planning_user_prompt
 from remote_agent.prompts.implementation import build_implementation_system_prompt, build_implementation_user_prompt
+from remote_agent.prompts.review import build_review_system_prompt, build_review_user_prompt
+from remote_agent.prompts.subagents import (
+    codebase_explorer_prompt, issue_advocate_prompt, design_critic_prompt,
+    plan_reviewer_prompt, implementer_prompt, spec_reviewer_prompt,
+    code_quality_reviewer_prompt, final_reviewer_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +34,7 @@ class AgentResult:
 
 @dataclass
 class CommentInterpretation:
-    intent: str  # "approve", "revise", "question", "back_to_planning"
+    intent: str  # "approve", "revise", "question", "back_to_design"
     response: str | None = None
 
 
@@ -36,16 +43,39 @@ class AgentService:
         self.config = config
         self.db = db
 
+    async def run_designing(self, *, issue_number: int, issue_title: str,
+                             issue_body: str, cwd: str, issue_id: int,
+                             existing_design: str | None = None,
+                             feedback: str | None = None) -> AgentResult:
+        from claude_agent_sdk import query, ClaudeAgentOptions
+
+        system_prompt = build_designing_system_prompt()
+        user_prompt = build_designing_user_prompt(
+            issue_number=issue_number, issue_title=issue_title,
+            issue_body=issue_body, existing_design=existing_design, feedback=feedback,
+        )
+
+        options = ClaudeAgentOptions(
+            system_prompt=system_prompt,
+            allowed_tools=["Read", "Glob", "Grep", "Write", "Edit", "Bash", "WebSearch", "Agent"],
+            permission_mode="bypassPermissions",
+            model=self.config.agent.planning_model,
+            max_turns=self.config.agent.max_turns,
+            max_budget_usd=self.config.agent.max_budget_usd,
+            cwd=cwd,
+            agents=self._get_designing_subagents(issue_body),
+        )
+        return await self._run_query(user_prompt, options, issue_id, phase="designing", allow_resume=True)
+
     async def run_planning(self, *, issue_number: int, issue_title: str,
-                            issue_body: str, cwd: str, issue_id: int,
-                            existing_plan: str | None = None,
-                            feedback: str | None = None) -> AgentResult:
+                            issue_body: str, design_content: str,
+                            cwd: str, issue_id: int) -> AgentResult:
         from claude_agent_sdk import query, ClaudeAgentOptions
 
         system_prompt = build_planning_system_prompt()
         user_prompt = build_planning_user_prompt(
             issue_number=issue_number, issue_title=issue_title,
-            issue_body=issue_body, existing_plan=existing_plan, feedback=feedback,
+            issue_body=issue_body, design_content=design_content,
         )
 
         options = ClaudeAgentOptions(
@@ -61,13 +91,16 @@ class AgentService:
         return await self._run_query(user_prompt, options, issue_id, phase="planning", allow_resume=True)
 
     async def run_implementation(self, *, plan_content: str, issue_title: str,
+                                  issue_body: str = "", design_content: str = "",
                                   cwd: str, issue_id: int,
                                   feedback: str | None = None) -> AgentResult:
         from claude_agent_sdk import query, ClaudeAgentOptions
 
         system_prompt = build_implementation_system_prompt()
         user_prompt = build_implementation_user_prompt(
-            plan_content=plan_content, issue_title=issue_title, feedback=feedback,
+            plan_content=plan_content, issue_title=issue_title,
+            issue_body=issue_body, design_content=design_content,
+            feedback=feedback,
         )
 
         options = ClaudeAgentOptions(
@@ -78,13 +111,49 @@ class AgentService:
             max_turns=self.config.agent.max_turns,
             max_budget_usd=self.config.agent.max_budget_usd,
             cwd=cwd,
-            agents=self._get_implementation_subagents(),
+            agents=self._get_implementation_subagents(issue_body),
         )
         return await self._run_query(user_prompt, options, issue_id, phase="implementing", allow_resume=True)
 
     async def interpret_comment(self, *, comment: str, context: str,
-                                 issue_title: str, issue_id: int) -> CommentInterpretation:
+                                 issue_title: str, issue_id: int,
+                                 design_content: str | None = None,
+                                 plan_content: str | None = None) -> CommentInterpretation:
         return self._classify_comment_text(comment, context)
+
+    async def answer_question(self, *, question: str, context: str,
+                               issue_title: str, issue_body: str,
+                               issue_id: int,
+                               design_content: str | None = None,
+                               plan_content: str | None = None) -> str:
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        system_prompt = (
+            f"You are answering a question about {context}. "
+            "Use the provided context to give a clear, helpful answer."
+        )
+
+        parts = [f"**Question:** {question}\n"]
+        parts.append(f"**Issue:** {issue_title}\n")
+        if issue_body:
+            parts.append(f"## Issue Body\n\n{issue_body}\n")
+        if design_content:
+            parts.append(f"## Design Document\n\n{design_content}\n")
+        if plan_content:
+            parts.append(f"## Implementation Plan\n\n{plan_content}\n")
+        user_prompt = "\n".join(parts)
+
+        options = ClaudeAgentOptions(
+            system_prompt=system_prompt,
+            allowed_tools=["Read", "Glob", "Grep"],
+            permission_mode="bypassPermissions",
+            model=self.config.agent.review_model,
+            max_turns=20,
+            max_budget_usd=1.0,
+        )
+
+        result = await self._run_query(user_prompt, options, issue_id, phase=f"{context}_question")
+        return result.result_text or ""
 
     async def _run_query(self, prompt: str, options, issue_id: int, phase: str,
                           allow_resume: bool = False) -> AgentResult:
@@ -138,99 +207,88 @@ class AgentService:
             )
             raise AgentError(str(e)) from e
 
+    def _get_designing_subagents(self, issue_body: str) -> dict:
+        from claude_agent_sdk import AgentDefinition
+        return {
+            "codebase-explorer": AgentDefinition(
+                description="Explores the codebase to understand structure, patterns, and conventions. Use this to research the repo before proposing designs.",
+                prompt=codebase_explorer_prompt(),
+                tools=["Read", "Glob", "Grep"],
+                model="sonnet",
+            ),
+            "issue-advocate": AgentDefinition(
+                description="Represents the issue author's intent. Use to ask clarifying questions about the issue and validate assumptions.",
+                prompt=issue_advocate_prompt(issue_body),
+                tools=["Read", "Glob", "Grep"],
+                model="sonnet",
+            ),
+            "design-critic": AgentDefinition(
+                description="Stress-tests design sections for completeness, feasibility, and alignment. Present sections one at a time for critique.",
+                prompt=design_critic_prompt(),
+                tools=["Read", "Glob", "Grep"],
+                model="sonnet",
+            ),
+        }
+
     def _get_planning_subagents(self) -> dict:
         from claude_agent_sdk import AgentDefinition
         return {
             "codebase-explorer": AgentDefinition(
                 description="Explores the codebase to understand structure, patterns, and conventions. Use this to research the repo before creating the plan.",
-                prompt="You are a codebase exploration specialist. Analyze the code structure, find patterns, understand conventions, and report findings clearly and concisely. Focus on: project structure, testing patterns, key abstractions, and coding style.",
+                prompt=codebase_explorer_prompt(),
                 tools=["Read", "Glob", "Grep"],
-                model="haiku",
+                model="sonnet",
+            ),
+            "plan-reviewer": AgentDefinition(
+                description="Validates the implementation plan against the design doc. Use after drafting the plan to check for gaps.",
+                prompt=plan_reviewer_prompt(),
+                tools=["Read", "Glob", "Grep"],
+                model="sonnet",
             ),
         }
 
-    def _get_implementation_subagents(self) -> dict:
+    def _get_implementation_subagents(self, issue_body: str) -> dict:
         from claude_agent_sdk import AgentDefinition
         return {
             "implementer": AgentDefinition(
                 description="Implements a specific task from the plan. Use for each individual implementation task.",
-                prompt="""You are a skilled developer implementing a specific task. You will receive the full task description including files to create/modify, tests to write, and implementation details.
-
-## Process
-1. Read the task carefully
-2. Write the failing test first
-3. Run it to verify it fails
-4. Write the minimal implementation to pass
-5. Run tests to verify they pass
-6. Self-review your work
-
-## Rules
-- Follow the task instructions exactly
-- Use test-driven development
-- Follow existing codebase patterns
-- Do not modify files outside the task scope
-- Run tests after every change
-
-## Report
-When done, report:
-- Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
-- What you implemented
-- Tests written and their results
-- Files changed
-- Any concerns or issues found during self-review
-""",
+                prompt=implementer_prompt(),
                 tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
                 model="sonnet",
             ),
             "spec-reviewer": AgentDefinition(
                 description="Reviews implementation for spec compliance. Use after each task is implemented.",
-                prompt="""You are a spec compliance reviewer. Your job is to verify that the implementation exactly matches what was requested.
-
-## What to Check
-- Every requirement in the task is implemented
-- Nothing extra was added (YAGNI)
-- Nothing was missed or misunderstood
-- Tests exist and test the right things
-- Code matches the file paths specified in the task
-
-## CRITICAL
-Do NOT trust the implementer's report. Read the actual code and tests yourself.
-
-## Output
-- APPROVED: Implementation matches spec exactly
-- ISSUES FOUND: List specific issues with file:line references
-""",
+                prompt=spec_reviewer_prompt(),
                 tools=["Read", "Glob", "Grep"],
                 model="sonnet",
             ),
             "code-reviewer": AgentDefinition(
                 description="Reviews code quality after spec compliance passes. Use after spec-reviewer approves.",
-                prompt="""You are a code quality reviewer. The implementation has already passed spec compliance review. Now verify it is well-built.
-
-## What to Check
-- Code is clean and readable
-- Tests are meaningful (not just coverage padding)
-- Follows existing codebase patterns and conventions
-- No security issues
-- Error handling is appropriate
-- File decomposition is correct (one responsibility per file)
-
-## Output
-- APPROVED: Code quality is good
-- ISSUES FOUND: List specific issues with file:line references, categorized as Critical/Important/Minor
-""",
+                prompt=code_quality_reviewer_prompt(),
                 tools=["Read", "Glob", "Grep"],
+                model="sonnet",
+            ),
+            "issue-advocate": AgentDefinition(
+                description="Represents the issue author's intent. Use to answer implementer questions about requirements.",
+                prompt=issue_advocate_prompt(issue_body),
+                tools=["Read", "Glob", "Grep"],
+                model="sonnet",
+            ),
+            "final-reviewer": AgentDefinition(
+                description="Performs a holistic review of the entire changeset after all tasks are complete.",
+                prompt=final_reviewer_prompt(),
+                tools=["Read", "Glob", "Grep", "Bash"],
                 model="sonnet",
             ),
         }
 
-    # Patterns for review header, approval phrases, and back-to-planning phrases
+    # Patterns for review header, approval phrases, and back-to-design phrases
     _REVIEW_HEADER_RE = re.compile(r'^\[Review\s*[—–-]\s*(\w+)\]\s*', re.MULTILINE)
     _APPROVE_RE = re.compile(
         r'\b(lgtm|looks?\s+good|approved?|ship\s+it|go\s+ahead)\b', re.IGNORECASE,
     )
-    _BACK_TO_PLANNING_RE = re.compile(
-        r'\b(back\s+to\s+planning|rethink|plan\s+needs?\s+to\s+change)\b', re.IGNORECASE,
+    _BACK_TO_DESIGN_RE = re.compile(
+        r'\b(back\s+to\s+design|rethink\s+the\s+design|design\s+needs?\s+to\s+change)\b', re.IGNORECASE,
     )
 
     def _classify_comment_text(self, comment: str, context: str) -> CommentInterpretation:
@@ -256,9 +314,9 @@ Do NOT trust the implementer's report. Read the actual code and tests yourself.
         if self._APPROVE_RE.search(text_body) and not has_inline:
             return CommentInterpretation(intent="approve")
 
-        # Check for back-to-planning (code_review only)
-        if context == 'code_review' and self._BACK_TO_PLANNING_RE.search(text_body):
-            return CommentInterpretation(intent="back_to_planning")
+        # Check for back-to-design (code_review only)
+        if context == 'code_review' and self._BACK_TO_DESIGN_RE.search(text_body):
+            return CommentInterpretation(intent="back_to_design")
 
         # Simple question detection
         if '?' in text_body:

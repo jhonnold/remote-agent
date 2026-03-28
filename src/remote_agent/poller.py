@@ -49,9 +49,26 @@ class Poller:
             if issue.issue_number not in open_numbers and not issue.issue_closed_seen:
                 await self._snapshot_and_mark_closed(owner, name, issue)
 
-        # 3. Check for new PR comments on issues in review or error phases
+        # 3. Check for new comments on issues in review or error phases
         review_issues = await self.db.get_issues_awaiting_comment(owner, name)
         for issue in review_issues:
+            if issue.phase == "design_review":
+                # Poll issue comments for design review (no PR exists yet)
+                try:
+                    comments = await self.github.get_pr_comments(owner, name, issue.issue_number)
+                except Exception:
+                    logger.exception("Error fetching issue comments for #%d", issue.issue_number)
+                    continue
+                new_comments = [c for c in comments if c["id"] > issue.last_issue_comment_id]
+                new_comments = [c for c in new_comments if c["author"] in self.config.users]
+                if new_comments:
+                    for comment in new_comments:
+                        await self.db.create_event(issue.id, "new_comment", comment)
+                    max_id = max(c["id"] for c in new_comments)
+                    await self.db.update_last_issue_comment_id(issue.id, max_id)
+                    logger.info("New issue comments on %s/%s#%d: %d", owner, name, issue.issue_number, len(new_comments))
+                continue  # Skip the PR comment polling
+
             if not issue.pr_number:
                 continue
 

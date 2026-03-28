@@ -1,8 +1,10 @@
 # src/remote_agent/phases/planning.py
 from __future__ import annotations
 import logging
+import shutil
 from pathlib import Path
 
+from remote_agent.config import Config
 from remote_agent.models import Issue, Event, PhaseResult
 from remote_agent.db import Database
 from remote_agent.github import GitHubService
@@ -13,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 class PlanningHandler:
-    def __init__(self, db: Database, github: GitHubService,
+    def __init__(self, config: Config, db: Database, github: GitHubService,
                  agent_service: AgentService, workspace_mgr: WorkspaceManager,
                  audit=None):
+        self.config = config
         self.db = db
         self.github = github
         self.agent_service = agent_service
@@ -24,6 +27,8 @@ class PlanningHandler:
 
     async def handle(self, issue: Issue, event: Event) -> PhaseResult:
         logger.info("Handling planning for issue %d", issue.id)
+
+        # 1. Ensure workspace + branch (branch already exists from designing phase)
         workspace = await self.workspace_mgr.ensure_workspace(
             issue.repo_owner, issue.repo_name, issue.issue_number,
         )
@@ -34,54 +39,44 @@ class PlanningHandler:
         await self.workspace_mgr.ensure_branch(workspace, branch, force=force)
         await self.db.update_issue_branch(issue.id, branch)
 
-        # Read existing plan if revision
-        existing_plan = None
-        plan_path = Path(workspace) / "docs" / "plans" / f"issue-{issue.issue_number}-plan.md"
-        if plan_path.exists():
-            existing_plan = plan_path.read_text()
+        # 2. Read the design doc from the branch
+        design_path = Path(workspace) / "docs" / "plans" / f"issue-{issue.issue_number}-design.md"
+        design_content = ""
+        if design_path.exists():
+            design_content = design_path.read_text()
 
-        feedback = event.payload.get("body") if event.event_type in ("revision_requested", "new_comment") else None
-
+        # 3. Run planning agent
         await self.agent_service.run_planning(
             issue_number=issue.issue_number,
             issue_title=issue.title,
             issue_body=issue.body or "",
+            design_content=design_content,
             cwd=workspace,
             issue_id=issue.id,
-            existing_plan=existing_plan,
-            feedback=feedback,
         )
 
-        commit_msg = "docs: plan for issue #{}".format(issue.issue_number)
-        if existing_plan:
-            commit_msg = "docs: revise plan for issue #{}".format(issue.issue_number)
-        await self.workspace_mgr.commit_and_push(workspace, branch, commit_msg)
+        # 4. Move plan from workspace to temp storage
+        plan_filename = f"issue-{issue.issue_number}-plan.md"
+        ws_plan_path = Path(workspace) / "docs" / "plans" / plan_filename
+        plans_dir = Path(workspace).parent / ".plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        temp_plan_path = plans_dir / plan_filename
 
-        plan_commit = await self.workspace_mgr.get_head_commit(workspace)
-        await self.db.set_plan_commit_hash(issue.id, plan_commit)
+        if ws_plan_path.exists():
+            shutil.move(str(ws_plan_path), str(temp_plan_path))
+            await self.db.set_plan_path(issue.id, str(temp_plan_path))
+        else:
+            return PhaseResult(next_phase="error",
+                               error_message=f"Planning agent did not produce plan at {ws_plan_path}")
 
-        pr_number = issue.pr_number
-        if not pr_number:
-            pr_number = await self.github.create_pr(
-                issue.repo_owner, issue.repo_name,
-                title=f"[Agent] Plan for: {issue.title}",
-                body=f"Plan for #{issue.issue_number}. Review the plan file and comment with feedback.",
-                branch=branch, draft=True,
-            )
-            await self.db.update_issue_pr(issue.id, pr_number)
-            if self.audit:
-                await self.audit.log(
-                    "github_api", "create_pr", issue_id=issue.id,
-                    detail={"pr_number": pr_number}, success=True,
-                )
+        # 6. Auto-transition to implementing (no human gate)
+        await self.db.create_event(issue.id, "revision_requested", {})
 
-        await self.github.post_comment(
-            issue.repo_owner, issue.repo_name, pr_number,
-            "Plan created/updated. Please review the plan file and comment with your feedback.",
-        )
-
+        # 7. Audit
         logger.info("Completed planning for issue %d", issue.id)
         if self.audit:
-            await self.audit.log("phase_transition", "plan_review",
+            await self.audit.log("phase_transition", "implementing",
                                   issue_id=issue.id, success=True)
-        return PhaseResult(next_phase="plan_review")
+
+        # 8. Return next phase
+        return PhaseResult(next_phase="implementing")

@@ -15,8 +15,9 @@ class Issue:
     branch_name: str | None = None
     pr_number: int | None = None
     workspace_path: str | None = None
-    plan_approved: bool = False
-    plan_commit_hash: str | None = None
+    design_approved: bool = False
+    design_commit_hash: str | None = None
+    plan_path: str | None = None
     last_comment_id: int = 0
     last_review_id: int = 0
     issue_closed_seen: bool = False

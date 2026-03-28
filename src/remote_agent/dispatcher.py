@@ -12,8 +12,9 @@ from remote_agent.github import GitHubService
 from remote_agent.agent import AgentService
 from remote_agent.workspace import WorkspaceManager
 from remote_agent.models import Issue, Event, PhaseResult
+from remote_agent.phases.designing import DesigningHandler
+from remote_agent.phases.design_review import DesignReviewHandler
 from remote_agent.phases.planning import PlanningHandler
-from remote_agent.phases.plan_review import PlanReviewHandler
 from remote_agent.phases.implementation import ImplementationHandler
 from remote_agent.phases.code_review import CodeReviewHandler
 
@@ -28,8 +29,9 @@ class Dispatcher:
         self.db = db
         self.github = github
         self.audit = audit
-        self._planning = PlanningHandler(db, github, agent_service, workspace_mgr, audit=audit)
-        self._plan_review = PlanReviewHandler(db, github, agent_service, audit=audit)
+        self._designing = DesigningHandler(db, github, agent_service, workspace_mgr, audit=audit)
+        self._design_review = DesignReviewHandler(db, github, agent_service, audit=audit)
+        self._planning = PlanningHandler(config, db, github, agent_service, workspace_mgr, audit=audit)
         self._implementation = ImplementationHandler(db, github, agent_service, workspace_mgr, audit=audit)
         self._code_review = CodeReviewHandler(db, github, agent_service, workspace_mgr, audit=audit)
 
@@ -71,7 +73,7 @@ class Dispatcher:
             return
 
         target_phase = self._determine_target_phase(issue, event)
-        if target_phase in ("planning", "implementing"):
+        if target_phase in ("designing", "planning", "implementing"):
             daily_spend = await self.db.get_daily_spend()
             if daily_spend >= self.config.agent.daily_budget_usd:
                 if not issue.budget_notified:
@@ -96,7 +98,8 @@ class Dispatcher:
                     )
                 except Exception:
                     logger.exception("Failed to close old PR #%d", issue.pr_number)
-            await self.db.set_plan_approved(issue.id, False)
+            await self.db.set_design_approved(issue.id, False)
+            await self.db.clear_plan_path(issue.id)
             await self.db.clear_issue_for_reopen(issue.id)
             # Re-fetch issue so handler sees cleared state (branch_name=None → force=True)
             issue = await self.db.get_issue_by_id(issue.id) or issue
@@ -135,10 +138,12 @@ class Dispatcher:
 
     def _get_handler(self, issue: Issue, event: Event):
         target = self._determine_target_phase(issue, event)
-        if target == "planning":
+        if target == "designing":
+            return self._designing
+        elif target == "design_review":
+            return self._design_review
+        elif target == "planning":
             return self._planning
-        elif target == "plan_review":
-            return self._plan_review
         elif target == "implementing":
             return self._implementation
         elif target == "code_review":
@@ -147,21 +152,27 @@ class Dispatcher:
 
     def _determine_target_phase(self, issue: Issue, event: Event) -> str | None:
         if event.event_type == "new_issue" and issue.phase == "new":
-            return "planning"
+            return "designing"
         if event.event_type == "reopen":
-            return "planning"
+            return "designing"
         if event.event_type == "revision_requested":
-            # Target phase encoded in the context of who created the event
-            if issue.phase in ("planning", "plan_review"):
+            if issue.phase in ("designing", "design_review"):
+                return "designing"
+            if issue.phase == "planning":
                 return "planning"
             if issue.phase in ("implementing", "code_review"):
-                return "implementing" if issue.plan_approved else "planning"
-            return "planning"
+                return "implementing" if issue.design_approved else "designing"
+            return "designing"
         if event.event_type == "new_comment":
-            if issue.phase == "plan_review":
-                return "plan_review"
+            if issue.phase == "design_review":
+                return "design_review"
             if issue.phase == "code_review":
                 return "code_review"
             if issue.phase == "error":
-                return "implementing" if issue.plan_approved else "planning"
+                if issue.design_approved and issue.plan_path:
+                    return "implementing"
+                elif issue.design_approved:
+                    return "planning"
+                else:
+                    return "designing"
         return None

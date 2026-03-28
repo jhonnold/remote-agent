@@ -32,33 +32,51 @@ def test_comment_interpretation_dataclass():
     assert interp.response == "Plan approved."
 
 
-def test_get_planning_subagents(agent_service):
-    agents = agent_service._get_planning_subagents()
-    assert "codebase-explorer" in agents
+def test_agent_service_has_run_designing_method(agent_service):
+    assert hasattr(agent_service, 'run_designing')
 
 
-def test_get_implementation_subagents(agent_service):
-    agents = agent_service._get_implementation_subagents()
-    assert "implementer" in agents
-    assert "spec-reviewer" in agents
-    assert "code-reviewer" in agents
+def test_agent_service_has_answer_question_method(agent_service):
+    assert hasattr(agent_service, 'answer_question')
+
+
+def test_get_designing_subagents(agent_service):
+    subagents = agent_service._get_designing_subagents("Test issue body")
+    assert "codebase-explorer" in subagents
+    assert "issue-advocate" in subagents
+    assert "design-critic" in subagents
+
+
+def test_get_planning_subagents_updated(agent_service):
+    subagents = agent_service._get_planning_subagents()
+    assert "codebase-explorer" in subagents
+    assert "plan-reviewer" in subagents
+
+
+def test_get_implementation_subagents_updated(agent_service):
+    subagents = agent_service._get_implementation_subagents("Issue body text")
+    assert "implementer" in subagents
+    assert "spec-reviewer" in subagents
+    assert "code-reviewer" in subagents
+    assert "issue-advocate" in subagents
+    assert "final-reviewer" in subagents
 
 
 def test_classify_lgtm_approves(agent_service):
-    interp = agent_service._classify_comment_text("LGTM", "plan_review")
+    interp = agent_service._classify_comment_text("LGTM", "design_review")
     assert interp.intent == "approve"
 
 
 def test_classify_plan_approved(agent_service):
     interp = agent_service._classify_comment_text(
-        "[Review \u2014 COMMENTED]\n\nPlan approved.", "plan_review"
+        "[Review \u2014 COMMENTED]\n\nPlan approved.", "design_review"
     )
     assert interp.intent == "approve"
 
 
 def test_classify_changes_requested_revises(agent_service):
     interp = agent_service._classify_comment_text(
-        "[Review \u2014 CHANGES_REQUESTED]\n\nPlease fix the tests.", "plan_review"
+        "[Review \u2014 CHANGES_REQUESTED]\n\nPlease fix the tests.", "design_review"
     )
     assert interp.intent == "revise"
 
@@ -72,21 +90,19 @@ def test_classify_github_approved_review(agent_service):
 
 def test_classify_question(agent_service):
     interp = agent_service._classify_comment_text(
-        "Why did you choose this approach?", "plan_review"
+        "Why did you choose this approach?", "design_review"
     )
     assert interp.intent == "question"
 
 
-def test_classify_back_to_planning(agent_service):
-    interp = agent_service._classify_comment_text(
-        "Let's rethink this approach", "code_review"
-    )
-    assert interp.intent == "back_to_planning"
+def test_classify_back_to_design(agent_service):
+    result = agent_service._classify_comment_text("let's rethink the design", "code_review")
+    assert result.intent == "back_to_design"
 
 
 def test_classify_unknown_defaults_to_revise(agent_service):
     interp = agent_service._classify_comment_text(
-        "Change the database schema to use UUIDs", "plan_review"
+        "Change the database schema to use UUIDs", "design_review"
     )
     assert interp.intent == "revise"
 
@@ -94,6 +110,6 @@ def test_classify_unknown_defaults_to_revise(agent_service):
 def test_classify_inline_comments_not_approve(agent_service):
     interp = agent_service._classify_comment_text(
         "[Review \u2014 COMMENTED]\n\nLooks good\n\nInline comments:\n- src/foo.py:10 \u2014 fix this",
-        "plan_review",
+        "design_review",
     )
     assert interp.intent == "revise"

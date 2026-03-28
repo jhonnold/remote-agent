@@ -58,13 +58,13 @@ async def test_get_issues_awaiting_comment(db):
     id1 = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
     id2 = await db.create_issue("o", "r", {"number": 2, "title": "T2", "body": ""})
     id3 = await db.create_issue("o", "r", {"number": 3, "title": "T3", "body": ""})
-    await db.update_issue_phase(id1, "plan_review")
+    await db.update_issue_phase(id1, "design_review")
     await db.update_issue_phase(id2, "implementing")
     await db.update_issue_phase(id3, "error")
     review_issues = await db.get_issues_awaiting_comment("o", "r")
-    assert len(review_issues) == 2  # plan_review + error
+    assert len(review_issues) == 2  # design_review + error
     phases = {i.phase for i in review_issues}
-    assert phases == {"plan_review", "error"}
+    assert phases == {"design_review", "error"}
 
 
 async def test_create_and_complete_agent_run(db):
@@ -86,7 +86,7 @@ async def test_get_daily_spend(db):
 
 async def test_transaction_for_comments(db):
     issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "design_review")
     await db.update_issue_pr(issue_id, 10)
     comments = [{"id": 100, "body": "LGTM"}, {"id": 101, "body": "Change X"}]
     await db.create_comment_events(issue_id, comments)
@@ -104,7 +104,7 @@ async def test_issue_has_last_review_id(db):
 
 async def test_create_review_events(db):
     issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "design_review")
     await db.update_issue_pr(issue_id, 10)
     reviews = [
         {"id": 500, "body": "Change X"},
@@ -139,8 +139,9 @@ async def test_clear_issue_for_reopen(db):
     await db.update_issue_phase(issue_id, "completed")
     await db.update_issue_pr(issue_id, 10)
     await db.update_issue_branch(issue_id, "agent/issue-1")
-    await db.set_plan_commit_hash(issue_id, "abc123")
+    await db.set_design_commit_hash(issue_id, "abc123")
     await db.update_issue_workspace(issue_id, "/tmp/ws")
+    await db.set_plan_path(issue_id, "docs/plan.md")
     await db.update_last_comment_id(issue_id, 100)
     await db.mark_issue_closed(issue_id, last_issue_comment_id=500)
 
@@ -149,7 +150,8 @@ async def test_clear_issue_for_reopen(db):
     issue = await db.get_issue("o", "r", 1)
     assert issue.pr_number is None
     assert issue.branch_name is None
-    assert issue.plan_commit_hash is None
+    assert issue.design_commit_hash is None
+    assert issue.plan_path is None
     assert issue.workspace_path is None
     assert issue.last_comment_id == 0
     assert issue.last_review_id == 0
@@ -177,3 +179,47 @@ async def test_update_last_issue_comment_id(db):
     await db.update_last_issue_comment_id(issue_id, 999)
     issue = await db.get_issue("o", "r", 1)
     assert issue.last_issue_comment_id == 999
+
+
+async def test_set_design_approved(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    await db.set_design_approved(issue_id, True)
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.design_approved is True
+
+
+async def test_set_design_commit_hash(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    await db.set_design_commit_hash(issue_id, "abc123")
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.design_commit_hash == "abc123"
+
+
+async def test_set_plan_path(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    await db.set_plan_path(issue_id, "docs/plan.md")
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.plan_path == "docs/plan.md"
+
+
+async def test_clear_plan_path(db):
+    issue_id = await db.create_issue("o", "r", {"number": 1, "title": "T", "body": ""})
+    await db.set_plan_path(issue_id, "docs/plan.md")
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.plan_path == "docs/plan.md"
+    await db.clear_plan_path(issue_id)
+    issue = await db.get_issue("o", "r", 1)
+    assert issue.plan_path is None
+
+
+async def test_get_issues_awaiting_comment_includes_design_review(db):
+    id1 = await db.create_issue("o", "r", {"number": 1, "title": "T1", "body": ""})
+    id2 = await db.create_issue("o", "r", {"number": 2, "title": "T2", "body": ""})
+    id3 = await db.create_issue("o", "r", {"number": 3, "title": "T3", "body": ""})
+    await db.update_issue_phase(id1, "design_review")
+    await db.update_issue_phase(id2, "code_review")
+    await db.update_issue_phase(id3, "implementing")
+    review_issues = await db.get_issues_awaiting_comment("o", "r")
+    assert len(review_issues) == 2
+    phases = {i.phase for i in review_issues}
+    assert phases == {"design_review", "code_review"}
