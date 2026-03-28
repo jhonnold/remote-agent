@@ -14,8 +14,65 @@ def test_issue_creation():
     )
     assert issue.repo_owner == "owner"
     assert issue.phase == "new"
-    assert issue.plan_approved is False
+    assert issue.design_approved is False
     assert issue.pr_number is None
+
+
+def test_issue_design_approved_default():
+    """design_approved defaults to False."""
+    issue = Issue(
+        id=1, repo_owner="o", repo_name="r",
+        issue_number=1, title="t", body=None, phase="new",
+    )
+    assert issue.design_approved is False
+
+
+def test_issue_design_approved_accepts_value():
+    """design_approved can be set to True."""
+    issue = Issue(
+        id=1, repo_owner="o", repo_name="r",
+        issue_number=1, title="t", body=None, phase="new",
+        design_approved=True,
+    )
+    assert issue.design_approved is True
+
+
+def test_issue_design_commit_hash_default():
+    """design_commit_hash defaults to None."""
+    issue = Issue(
+        id=1, repo_owner="o", repo_name="r",
+        issue_number=1, title="t", body=None, phase="new",
+    )
+    assert issue.design_commit_hash is None
+
+
+def test_issue_design_commit_hash_accepts_value():
+    """design_commit_hash can be set to a string."""
+    issue = Issue(
+        id=1, repo_owner="o", repo_name="r",
+        issue_number=1, title="t", body=None, phase="new",
+        design_commit_hash="abc123",
+    )
+    assert issue.design_commit_hash == "abc123"
+
+
+def test_issue_plan_path_default():
+    """plan_path defaults to None."""
+    issue = Issue(
+        id=1, repo_owner="o", repo_name="r",
+        issue_number=1, title="t", body=None, phase="new",
+    )
+    assert issue.plan_path is None
+
+
+def test_issue_plan_path_accepts_value():
+    """plan_path can be set to a string."""
+    issue = Issue(
+        id=1, repo_owner="o", repo_name="r",
+        issue_number=1, title="t", body=None, phase="new",
+        plan_path="docs/plan.md",
+    )
+    assert issue.plan_path == "docs/plan.md"
 
 
 def test_event_creation():
