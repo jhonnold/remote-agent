@@ -32,16 +32,34 @@ def test_comment_interpretation_dataclass():
     assert interp.response == "Plan approved."
 
 
-def test_get_planning_subagents(agent_service):
-    agents = agent_service._get_planning_subagents()
-    assert "codebase-explorer" in agents
+def test_agent_service_has_run_designing_method(agent_service):
+    assert hasattr(agent_service, 'run_designing')
 
 
-def test_get_implementation_subagents(agent_service):
-    agents = agent_service._get_implementation_subagents()
-    assert "implementer" in agents
-    assert "spec-reviewer" in agents
-    assert "code-reviewer" in agents
+def test_agent_service_has_answer_question_method(agent_service):
+    assert hasattr(agent_service, 'answer_question')
+
+
+def test_get_designing_subagents(agent_service):
+    subagents = agent_service._get_designing_subagents("Test issue body")
+    assert "codebase-explorer" in subagents
+    assert "issue-advocate" in subagents
+    assert "design-critic" in subagents
+
+
+def test_get_planning_subagents_updated(agent_service):
+    subagents = agent_service._get_planning_subagents()
+    assert "codebase-explorer" in subagents
+    assert "plan-reviewer" in subagents
+
+
+def test_get_implementation_subagents_updated(agent_service):
+    subagents = agent_service._get_implementation_subagents("Issue body text")
+    assert "implementer" in subagents
+    assert "spec-reviewer" in subagents
+    assert "code-reviewer" in subagents
+    assert "issue-advocate" in subagents
+    assert "final-reviewer" in subagents
 
 
 def test_classify_lgtm_approves(agent_service):
@@ -77,11 +95,9 @@ def test_classify_question(agent_service):
     assert interp.intent == "question"
 
 
-def test_classify_back_to_planning(agent_service):
-    interp = agent_service._classify_comment_text(
-        "Let's rethink this approach", "code_review"
-    )
-    assert interp.intent == "back_to_planning"
+def test_classify_back_to_design(agent_service):
+    result = agent_service._classify_comment_text("let's rethink the design", "code_review")
+    assert result.intent == "back_to_design"
 
 
 def test_classify_unknown_defaults_to_revise(agent_service):
