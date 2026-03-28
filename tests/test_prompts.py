@@ -76,21 +76,57 @@ def test_implementation_system_prompt_contains_key_instructions():
     assert "do not write code yourself" in prompt.lower() or "do NOT write code" in prompt
 
 
+def test_implementation_system_prompt_references_issue_advocate():
+    prompt = build_implementation_system_prompt()
+    assert "issue-advocate" in prompt or "issue_advocate" in prompt
+    assert "final-reviewer" in prompt or "final_reviewer" in prompt
+    assert "scene-setting" in prompt.lower() or "scene setting" in prompt.lower()
+
+
+def test_implementation_system_prompt_red_flags():
+    prompt = build_implementation_system_prompt()
+    assert "never parallelize" in prompt.lower() or "do not parallelize" in prompt.lower()
+    assert "never skip review" in prompt.lower() or "do not skip review" in prompt.lower()
+    assert "full task text" in prompt.lower()
+    assert "3 iteration" in prompt.lower() or "three iteration" in prompt.lower()
+
+
+def test_implementation_system_prompt_verification():
+    prompt = build_implementation_system_prompt()
+    assert "full test suite" in prompt.lower()
+    assert "verification" in prompt.lower() or "verify" in prompt.lower()
+
+
 def test_implementation_user_prompt():
     prompt = build_implementation_user_prompt(
         plan_content="## Task 1\nDo stuff",
         issue_title="Add auth",
+        issue_body="Need OAuth2",
+        design_content="## Design\nUse tokens",
     )
     assert "Task 1" in prompt
     assert "Add auth" in prompt
+    assert "Need OAuth2" in prompt
+    assert "## Design" in prompt or "Use tokens" in prompt
 
 
 def test_implementation_user_prompt_with_feedback():
     prompt = build_implementation_user_prompt(
         plan_content="## Task 1", issue_title="X",
+        issue_body="Body", design_content="Design",
         feedback="Fix the error handling",
     )
     assert "Fix the error handling" in prompt
+
+
+def test_implementation_user_prompt_includes_design_and_issue():
+    prompt = build_implementation_user_prompt(
+        plan_content="## Plan", issue_title="Add auth",
+        issue_body="Need OAuth2", design_content="## Design",
+    )
+    assert "## Plan" in prompt
+    assert "## Design" in prompt
+    assert "Need OAuth2" in prompt
 
 
 def test_review_system_prompt():

@@ -61,13 +61,16 @@ class AgentService:
         return await self._run_query(user_prompt, options, issue_id, phase="planning", allow_resume=True)
 
     async def run_implementation(self, *, plan_content: str, issue_title: str,
+                                  issue_body: str = "", design_content: str = "",
                                   cwd: str, issue_id: int,
                                   feedback: str | None = None) -> AgentResult:
         from claude_agent_sdk import query, ClaudeAgentOptions
 
         system_prompt = build_implementation_system_prompt()
         user_prompt = build_implementation_user_prompt(
-            plan_content=plan_content, issue_title=issue_title, feedback=feedback,
+            plan_content=plan_content, issue_title=issue_title,
+            issue_body=issue_body, design_content=design_content,
+            feedback=feedback,
         )
 
         options = ClaudeAgentOptions(
