@@ -177,6 +177,8 @@ class AgentService:
         output_tokens = 0
 
         try:
+            logger.debug("Agent prompt for issue %d phase=%s:\n%s", issue_id, phase, prompt)
+            logger.debug("Agent system prompt for issue %d phase=%s:\n%s", issue_id, phase, getattr(options, "system_prompt", ""))
             async for message in query(prompt=prompt, options=options):
                 if isinstance(message, ResultMessage):
                     session_id = message.session_id
@@ -185,6 +187,7 @@ class AgentService:
                     usage = message.usage or {}
                     input_tokens = usage.get("input_tokens", 0)
                     output_tokens = usage.get("output_tokens", 0)
+                    logger.debug("Agent result for issue %d phase=%s:\n%s", issue_id, phase, result_text)
 
             logger.info("Completed %s query for issue %d, cost=$%.4f, tokens=%d+%d, session=%s",
                         phase, issue_id, cost, input_tokens, output_tokens, session_id)
