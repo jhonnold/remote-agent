@@ -69,7 +69,7 @@ async def test_designing_creates_branch_and_posts_design(handler, deps, new_issu
     deps["workspace_mgr"].ensure_branch.assert_called_once_with("/tmp/ws", "agent/issue-42", force=True)
     # Design committed
     deps["workspace_mgr"].commit_and_push.assert_called_once_with(
-        "/tmp/ws", "agent/issue-42", "docs: design for issue #42",
+        "/tmp/ws", "agent/issue-42", "docs: add design for Add auth (#42)\n\nRefs #42",
     )
     # Design commit hash stored
     deps["db"].set_design_commit_hash.assert_called_once_with(1, "abc123")
@@ -110,7 +110,7 @@ async def test_designing_revision_passes_feedback(handler, deps):
     assert call_kwargs["feedback"] == "Change approach to use JWT"
     # Commit message says "revise"
     deps["workspace_mgr"].commit_and_push.assert_called_once_with(
-        "/tmp/ws", "agent/issue-42", "docs: revise design for issue #42",
+        "/tmp/ws", "agent/issue-42", "docs: revise design for Add auth (#42)\n\nRefs #42",
     )
 
 
@@ -137,3 +137,45 @@ async def test_designing_audit_records(deps, new_issue, new_issue_event):
     assert audit.log.call_count >= 1
     categories = [c.args[0] for c in audit.log.call_args_list]
     assert "phase_transition" in categories
+
+
+async def test_designing_uses_llm_commit_message(handler, deps, new_issue, new_issue_event):
+    """Verify that when the agent provides a <commit_message> tag, it's used."""
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["workspace_mgr"].get_head_commit.return_value = "abc123"
+    deps["agent_service"].run_designing.return_value = AgentResult(
+        success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
+        result_text="Here is the design.\n<commit_message>docs: add design for auth flow</commit_message>",
+    )
+
+    path_mocks = [
+        _make_path_mock(exists=False),
+        _make_path_mock(exists=True, content="# Design\nSome design content"),
+    ]
+    with patch("remote_agent.phases.designing.Path", side_effect=path_mocks):
+        result = await handler.handle(new_issue, new_issue_event)
+
+    deps["workspace_mgr"].commit_and_push.assert_called_once_with(
+        "/tmp/ws", "agent/issue-42", "docs: add design for auth flow\n\nRefs #42",
+    )
+
+
+async def test_designing_falls_back_on_missing_tag(handler, deps, new_issue, new_issue_event):
+    """Verify fallback when agent doesn't provide a <commit_message> tag."""
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["workspace_mgr"].get_head_commit.return_value = "abc123"
+    deps["agent_service"].run_designing.return_value = AgentResult(
+        success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
+        result_text="No tag here, just design output.",
+    )
+
+    path_mocks = [
+        _make_path_mock(exists=False),
+        _make_path_mock(exists=True, content="# Design\nSome design content"),
+    ]
+    with patch("remote_agent.phases.designing.Path", side_effect=path_mocks):
+        result = await handler.handle(new_issue, new_issue_event)
+
+    deps["workspace_mgr"].commit_and_push.assert_called_once_with(
+        "/tmp/ws", "agent/issue-42", "docs: add design for Add auth (#42)\n\nRefs #42",
+    )

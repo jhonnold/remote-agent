@@ -82,6 +82,7 @@ What are the key design decisions and why?]
 - Be specific: reference exact file paths, function names, and patterns from the codebase.
 - Do NOT implement anything. Only produce the design document.
 - If this is a revision, incorporate the feedback while preserving approved parts.
+- After completing the design document, emit a commit message summarizing your changes using conventional commit format inside a `<commit_message>` XML tag. The message should describe what the design covers, not just reference the issue number. Example: `<commit_message>docs: add design covering retry logic, timeout configuration, and error propagation</commit_message>`
 """
 
 

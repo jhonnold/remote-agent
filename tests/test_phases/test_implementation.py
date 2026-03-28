@@ -1,6 +1,6 @@
 # tests/test_phases/test_implementation.py
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from remote_agent.phases.implementation import ImplementationHandler
 from remote_agent.models import Issue, Event
 from remote_agent.agent import AgentResult
@@ -76,7 +76,7 @@ async def test_implementation_creates_pr_when_none_exists(handler, deps):
     deps["github"].create_pr.assert_called_once_with(
         "o", "r",
         title="[Agent] Add auth",
-        body="Implementation for #42",
+        body="Implementation for #42\n\nCloses #42",
         branch="agent/issue-42",
         draft=False,
     )
@@ -153,3 +153,73 @@ async def test_implementation_returns_error_when_plan_path_none(handler, deps):
     result = await handler.handle(issue, event)
     assert result.next_phase == "error"
     assert "plan_path" in result.error_message.lower()
+
+
+async def test_implementation_uses_llm_commit_message(handler, deps):
+    """Verify that when the agent provides a <commit_message> tag, it's used."""
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="Need OAuth2", phase="implementing",
+                  branch_name="agent/issue-42", pr_number=10,
+                  plan_path="/tmp/.plans/issue-42-plan.md")
+    event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["agent_service"].run_implementation.return_value = AgentResult(
+        success=True, session_id="s", cost_usd=2.0, input_tokens=500, output_tokens=1000,
+        result_text="Done.\n<commit_message>feat: add OAuth2 endpoints</commit_message>",
+    )
+
+    with patch("remote_agent.phases.implementation.Path") as path_mock:
+        path_mock.return_value.exists.return_value = True
+        path_mock.return_value.read_text.return_value = "# Plan content"
+        result = await handler.handle(issue, event)
+
+    assert result.next_phase == "code_review"
+    deps["workspace_mgr"].commit_and_push.assert_called_once_with(
+        "/tmp/ws", "agent/issue-42", "feat: add OAuth2 endpoints\n\nCloses #42",
+    )
+
+
+async def test_implementation_falls_back_on_none_result(handler, deps):
+    """Verify fallback when agent doesn't provide a <commit_message> tag."""
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="", phase="implementing",
+                  branch_name="agent/issue-42", pr_number=10,
+                  plan_path="/tmp/.plans/issue-42-plan.md")
+    event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["agent_service"].run_implementation.return_value = AgentResult(
+        success=True, session_id="s", cost_usd=2.0, input_tokens=500, output_tokens=1000,
+    )
+
+    with patch("remote_agent.phases.implementation.Path") as path_mock:
+        path_mock.return_value.exists.return_value = True
+        path_mock.return_value.read_text.return_value = "# Plan content"
+        result = await handler.handle(issue, event)
+
+    assert result.next_phase == "code_review"
+    deps["workspace_mgr"].commit_and_push.assert_called_once_with(
+        "/tmp/ws", "agent/issue-42", "feat: implement Add auth (#42)\n\nCloses #42",
+    )
+
+
+async def test_implementation_pr_body_includes_closes(handler, deps):
+    """Verify that the PR body includes the Closes keyword for GitHub auto-closing."""
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="Need OAuth2", phase="implementing",
+                  branch_name="agent/issue-42",
+                  plan_path="/tmp/.plans/issue-42-plan.md")
+    event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["github"].create_pr.return_value = 55
+    deps["agent_service"].run_implementation.return_value = AgentResult(
+        success=True, session_id="s", cost_usd=2.0, input_tokens=500, output_tokens=1000,
+    )
+
+    with patch("remote_agent.phases.implementation.Path") as path_mock:
+        path_mock.return_value.exists.return_value = True
+        path_mock.return_value.read_text.return_value = "# Plan content"
+        result = await handler.handle(issue, event)
+
+    assert result.next_phase == "code_review"
+    call_kwargs = deps["github"].create_pr.call_args.kwargs
+    assert "Closes #42" in call_kwargs["body"]

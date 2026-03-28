@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from remote_agent.models import Issue, Event, PhaseResult
+from remote_agent.agent import AgentService
+from remote_agent.commit_message import extract_commit_message, build_commit_message
 from remote_agent.db import Database
 from remote_agent.github import GitHubService
-from remote_agent.agent import AgentService
+from remote_agent.models import Issue, Event, PhaseResult
 from remote_agent.workspace import WorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ class DesigningHandler:
             feedback = event.payload.get("body")
 
         # 5. Run designing agent
-        await self.agent_service.run_designing(
+        result = await self.agent_service.run_designing(
             issue_number=issue.issue_number,
             issue_title=issue.title,
             issue_body=issue.body or "",
@@ -60,9 +61,11 @@ class DesigningHandler:
         )
 
         # 6. Commit and push
-        commit_msg = "docs: design for issue #{}".format(issue.issue_number)
-        if existing_design:
-            commit_msg = "docs: revise design for issue #{}".format(issue.issue_number)
+        extracted = extract_commit_message(result.result_text)
+        commit_msg = build_commit_message(
+            extracted, issue.issue_number, issue.title,
+            closes=False, is_revision=bool(existing_design),
+        )
         await self.workspace_mgr.commit_and_push(workspace, branch, commit_msg)
 
         # 7. Store design commit hash
@@ -70,10 +73,10 @@ class DesigningHandler:
         await self.db.set_design_commit_hash(issue.id, design_commit)
 
         # 8. Post design as issue comment (NOT PR comment)
-        post_design_path = Path(workspace) / "docs" / "plans" / f"issue-{issue.issue_number}-design.md"
+        # Reuse the design path to read the generated design
         design_content = ""
-        if post_design_path.exists():
-            design_content = post_design_path.read_text()
+        if design_path.exists():
+            design_content = design_path.read_text()
 
         if not design_content.strip():
             return PhaseResult(next_phase="error",
