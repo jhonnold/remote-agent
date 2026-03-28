@@ -87,8 +87,8 @@ def test_event_creation():
 
 
 def test_phase_result():
-    result = PhaseResult(next_phase="plan_review")
-    assert result.next_phase == "plan_review"
+    result = PhaseResult(next_phase="design_review")
+    assert result.next_phase == "design_review"
     assert result.error_message is None
 
 

@@ -169,5 +169,10 @@ class Dispatcher:
             if issue.phase == "code_review":
                 return "code_review"
             if issue.phase == "error":
-                return "implementing" if issue.design_approved else "designing"
+                if issue.design_approved and issue.plan_path:
+                    return "implementing"
+                elif issue.design_approved:
+                    return "planning"
+                else:
+                    return "designing"
         return None

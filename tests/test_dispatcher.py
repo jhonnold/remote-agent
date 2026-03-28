@@ -264,20 +264,26 @@ async def test_revision_from_implementing_without_design_approved(deps, dispatch
     assert target == "designing"
 
 
-async def test_error_phase_comment_routes_based_on_design_approved(deps, dispatcher):
-    """new_comment in error phase routes to 'implementing' if design_approved, else 'designing'."""
-    # With design_approved=True
-    issue_approved = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
-                           title="T", body="", phase="error", design_approved=True)
+async def test_error_phase_comment_routes_based_on_state(deps, dispatcher):
+    """new_comment in error phase routes based on design_approved and plan_path."""
     event = Event(id=1, issue_id=1, event_type="new_comment", payload={"body": "retry"})
 
-    target = dispatcher._determine_target_phase(issue_approved, event)
+    # With design_approved=True and plan_path set -> implementing
+    issue_with_plan = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
+                            title="T", body="", phase="error",
+                            design_approved=True, plan_path="/tmp/.plans/plan.md")
+    target = dispatcher._determine_target_phase(issue_with_plan, event)
     assert target == "implementing"
 
-    # With design_approved=False
+    # With design_approved=True but no plan_path -> planning
+    issue_no_plan = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
+                          title="T", body="", phase="error", design_approved=True)
+    target = dispatcher._determine_target_phase(issue_no_plan, event)
+    assert target == "planning"
+
+    # With design_approved=False -> designing
     issue_not_approved = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
                                title="T", body="", phase="error", design_approved=False)
-
     target = dispatcher._determine_target_phase(issue_not_approved, event)
     assert target == "designing"
 

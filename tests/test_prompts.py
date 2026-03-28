@@ -134,12 +134,12 @@ def test_review_system_prompt():
     assert "classify_comment" in prompt
 
 
-def test_review_user_prompt_plan_review():
+def test_review_user_prompt_design_review_no_back_to_design():
     prompt = build_review_user_prompt(
-        comment="Looks good!", context="plan_review", issue_title="Add auth",
+        comment="Looks good!", context="design_review", issue_title="Add auth",
     )
     assert "Looks good!" in prompt
-    assert "back_to_design" not in prompt  # Not valid for plan_review
+    assert "back_to_design" not in prompt  # Not valid for design_review
 
 
 def test_review_user_prompt_code_review():

@@ -96,7 +96,8 @@ async def test_full_lifecycle_happy_path(config, db, github, agent_service, work
         success=True, session_id="s1", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
 
-    with patch("pathlib.Path.exists", return_value=False):
+    with patch("pathlib.Path.exists", side_effect=[False, True]), \
+         patch("pathlib.Path.read_text", return_value="## Design\nContent"):
         await dispatcher.process_events()
 
     issue = await db.get_issue("owner", "repo", 1)
@@ -199,7 +200,8 @@ async def test_review_comment_triggers_revision(config, db, github, agent_servic
     )
 
     await poller.poll_once()
-    with patch("pathlib.Path.exists", return_value=False):
+    with patch("pathlib.Path.exists", side_effect=[False, True]), \
+         patch("pathlib.Path.read_text", return_value="## Design\nContent"):
         await dispatcher.process_events()
 
     issue = await db.get_issue("owner", "repo", 1)
@@ -279,7 +281,8 @@ async def test_completed_issue_reopen_lifecycle(config, db, github, agent_servic
         success=True, session_id="s-reopen", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
 
-    with patch("pathlib.Path.exists", return_value=False):
+    with patch("pathlib.Path.exists", side_effect=[False, True]), \
+         patch("pathlib.Path.read_text", return_value="## Design\nContent"):
         await dispatcher.process_events()
 
     # Verify old PR was closed

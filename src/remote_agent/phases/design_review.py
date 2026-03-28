@@ -53,6 +53,7 @@ class DesignReviewHandler:
             answer = await self.agent_service.answer_question(
                 question=comment_body, context="design_review",
                 issue_title=issue.title, issue_body=issue.body or "",
+                issue_id=issue.id,
             )
             await self.github.post_comment(
                 issue.repo_owner, issue.repo_name, issue.issue_number, answer,

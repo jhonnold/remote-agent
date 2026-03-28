@@ -2,13 +2,13 @@ from __future__ import annotations
 
 
 def build_review_system_prompt() -> str:
-    return """You are interpreting a human's comment on a pull request.
+    return """You are interpreting a human's comment on a GitHub issue or pull request.
 
 ## Your Task
 Read the comment and classify the human's intent using the classify_comment tool.
 
 ## Contexts
-You may be classifying comments in these contexts: design_review, plan_review, code_review.
+You may be classifying comments in these contexts: design_review, code_review.
 
 ## Intent Categories
 - **approve**: The human is satisfied and wants to proceed to the next phase.
@@ -39,12 +39,10 @@ def build_review_user_prompt(
         valid_intents = "approve, revise, question"
     elif context == "code_review":
         valid_intents = "approve, revise, question, back_to_design"
-    elif context == "plan_review":
-        valid_intents = "approve, revise, question"
     else:
         valid_intents = "approve, revise, question"
 
-    return f"""Classify the following comment on the PR for: **{issue_title}**
+    return f"""Classify the following comment for: **{issue_title}**
 
 **Valid intents for this phase ({context}):** {valid_intents}
 

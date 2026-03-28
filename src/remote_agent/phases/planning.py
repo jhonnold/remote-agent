@@ -64,12 +64,10 @@ class PlanningHandler:
 
         if ws_plan_path.exists():
             shutil.move(str(ws_plan_path), str(temp_plan_path))
+            await self.db.set_plan_path(issue.id, str(temp_plan_path))
         else:
-            # Plan may have been written elsewhere; nothing to move
-            logger.warning("Plan file not found at %s", ws_plan_path)
-
-        # 5. Store plan path on the issue
-        await self.db.set_plan_path(issue.id, str(temp_plan_path))
+            return PhaseResult(next_phase="error",
+                               error_message=f"Planning agent did not produce plan at {ws_plan_path}")
 
         # 6. Auto-transition to implementing (no human gate)
         await self.db.create_event(issue.id, "revision_requested", {})

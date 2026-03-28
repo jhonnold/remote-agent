@@ -62,6 +62,7 @@ async def test_question_posts_answer_and_stays(handler, deps, review_issue):
         context="design_review",
         issue_title="Add auth",
         issue_body="Need OAuth2",
+        issue_id=1,
     )
     # Answer posted on the issue
     deps["github"].post_comment.assert_called_once()

@@ -9,9 +9,10 @@
 
 ## Architecture
 - **Entry**: `src/remote_agent/main.py` -> poll loop -> dispatch events -> phase handlers
-- **State machine**: new -> planning -> plan_review -> implementing -> code_review -> completed
+- **State machine**: new -> designing -> design_review -> planning -> implementing -> code_review -> completed
 - **All GitHub ops**: via `gh` CLI subprocess (`github.py`), never httpx/REST
 - **All AI ops**: via `claude-agent-sdk` query() in `agent.py` - sole module importing the SDK
+- **Prompts**: centralized in `prompts/` — `subagents.py` has all 8 sub-agent role prompts
 - To add a new phase: extend `PhaseHandler` in `phases/base.py`, add to dispatcher's `__init__` and `_get_handler`
 
 ## Code Patterns

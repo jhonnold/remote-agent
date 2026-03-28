@@ -63,20 +63,20 @@ def test_get_implementation_subagents_updated(agent_service):
 
 
 def test_classify_lgtm_approves(agent_service):
-    interp = agent_service._classify_comment_text("LGTM", "plan_review")
+    interp = agent_service._classify_comment_text("LGTM", "design_review")
     assert interp.intent == "approve"
 
 
 def test_classify_plan_approved(agent_service):
     interp = agent_service._classify_comment_text(
-        "[Review \u2014 COMMENTED]\n\nPlan approved.", "plan_review"
+        "[Review \u2014 COMMENTED]\n\nPlan approved.", "design_review"
     )
     assert interp.intent == "approve"
 
 
 def test_classify_changes_requested_revises(agent_service):
     interp = agent_service._classify_comment_text(
-        "[Review \u2014 CHANGES_REQUESTED]\n\nPlease fix the tests.", "plan_review"
+        "[Review \u2014 CHANGES_REQUESTED]\n\nPlease fix the tests.", "design_review"
     )
     assert interp.intent == "revise"
 
@@ -90,7 +90,7 @@ def test_classify_github_approved_review(agent_service):
 
 def test_classify_question(agent_service):
     interp = agent_service._classify_comment_text(
-        "Why did you choose this approach?", "plan_review"
+        "Why did you choose this approach?", "design_review"
     )
     assert interp.intent == "question"
 
@@ -102,7 +102,7 @@ def test_classify_back_to_design(agent_service):
 
 def test_classify_unknown_defaults_to_revise(agent_service):
     interp = agent_service._classify_comment_text(
-        "Change the database schema to use UUIDs", "plan_review"
+        "Change the database schema to use UUIDs", "design_review"
     )
     assert interp.intent == "revise"
 
@@ -110,6 +110,6 @@ def test_classify_unknown_defaults_to_revise(agent_service):
 def test_classify_inline_comments_not_approve(agent_service):
     interp = agent_service._classify_comment_text(
         "[Review \u2014 COMMENTED]\n\nLooks good\n\nInline comments:\n- src/foo.py:10 \u2014 fix this",
-        "plan_review",
+        "design_review",
     )
     assert interp.intent == "revise"

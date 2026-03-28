@@ -75,6 +75,10 @@ class DesigningHandler:
         if post_design_path.exists():
             design_content = post_design_path.read_text()
 
+        if not design_content.strip():
+            return PhaseResult(next_phase="error",
+                               error_message="Designing agent did not produce a design document")
+
         comment_body = (
             "## Design Document\n\n"
             f"{design_content}\n\n"

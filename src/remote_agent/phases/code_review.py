@@ -70,19 +70,10 @@ class CodeReviewHandler:
             return PhaseResult(next_phase="implementing")
 
         elif interpretation.intent == "back_to_design":
-            # Reset branch to design commit
-            if issue.design_commit_hash:
-                await self.workspace_mgr.reset_to_commit(
-                    issue.workspace_path, issue.design_commit_hash, issue.branch_name,
-                )
-            # Mark PR as draft
+            # Non-destructive operations first
             await self.github.mark_pr_draft(issue.repo_owner, issue.repo_name, issue.pr_number)
-            # Mark design unapproved
             await self.db.set_design_approved(issue.id, False)
-            # Clean temp plan
             await self.db.clear_plan_path(issue.id)
-            if issue.plan_path:
-                Path(issue.plan_path).unlink(missing_ok=True)
             # Post feedback on ISSUE (not PR) - design review lives on the issue
             feedback_text = (
                 f"Code review feedback requests design changes:\n\n> {comment_body}\n\n"
@@ -92,12 +83,20 @@ class CodeReviewHandler:
                 issue.repo_owner, issue.repo_name, issue.issue_number, feedback_text,
             )
             await self.db.create_event(issue.id, "revision_requested", event.payload)
+            # Destructive operations last
+            if issue.design_commit_hash:
+                await self.workspace_mgr.reset_to_commit(
+                    issue.workspace_path, issue.design_commit_hash, issue.branch_name,
+                )
+            if issue.plan_path:
+                Path(issue.plan_path).unlink(missing_ok=True)
             return PhaseResult(next_phase="designing")
 
         elif interpretation.intent == "question":
             answer = await self.agent_service.answer_question(
                 question=comment_body, context="code_review",
                 issue_title=issue.title, issue_body=issue.body or "",
+                issue_id=issue.id,
                 design_content=design_content,
                 plan_content=plan_content,
             )

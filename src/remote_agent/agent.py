@@ -123,9 +123,10 @@ class AgentService:
 
     async def answer_question(self, *, question: str, context: str,
                                issue_title: str, issue_body: str,
+                               issue_id: int,
                                design_content: str | None = None,
                                plan_content: str | None = None) -> str:
-        from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
+        from claude_agent_sdk import ClaudeAgentOptions
 
         system_prompt = (
             f"You are answering a question about {context}. "
@@ -151,12 +152,8 @@ class AgentService:
             max_budget_usd=1.0,
         )
 
-        result_text = ""
-        async for message in query(prompt=user_prompt, options=options):
-            if isinstance(message, ResultMessage):
-                result_text = message.result or ""
-
-        return result_text
+        result = await self._run_query(user_prompt, options, issue_id, phase=f"{context}_question")
+        return result.result_text or ""
 
     async def _run_query(self, prompt: str, options, issue_id: int, phase: str,
                           allow_resume: bool = False) -> AgentResult:
@@ -285,7 +282,7 @@ class AgentService:
             ),
         }
 
-    # Patterns for review header, approval phrases, and back-to-planning phrases
+    # Patterns for review header, approval phrases, and back-to-design phrases
     _REVIEW_HEADER_RE = re.compile(r'^\[Review\s*[—–-]\s*(\w+)\]\s*', re.MULTILINE)
     _APPROVE_RE = re.compile(
         r'\b(lgtm|looks?\s+good|approved?|ship\s+it|go\s+ahead)\b', re.IGNORECASE,
