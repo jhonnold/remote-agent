@@ -22,8 +22,9 @@ CREATE TABLE IF NOT EXISTS issues (
     branch_name TEXT,
     pr_number INTEGER,
     workspace_path TEXT,
-    plan_approved INTEGER DEFAULT 0,
-    plan_commit_hash TEXT,
+    design_approved INTEGER DEFAULT 0,
+    design_commit_hash TEXT,
+    plan_path TEXT,
     last_comment_id INTEGER DEFAULT 0,
     last_review_id INTEGER DEFAULT 0,
     issue_closed_seen INTEGER DEFAULT 0,
@@ -102,6 +103,32 @@ class Database:
             await conn.commit()
         except Exception:
             pass
+        try:
+            await conn.execute("ALTER TABLE issues ADD COLUMN design_approved INTEGER DEFAULT 0")
+            await conn.commit()
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE issues ADD COLUMN design_commit_hash TEXT")
+            await conn.commit()
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE issues ADD COLUMN plan_path TEXT")
+            await conn.commit()
+        except Exception:
+            pass
+        # Copy data from old columns to new (for databases that had plan_approved/plan_commit_hash)
+        try:
+            await conn.execute("UPDATE issues SET design_approved = plan_approved WHERE design_approved = 0 AND plan_approved = 1")
+            await conn.commit()
+        except Exception:
+            pass
+        try:
+            await conn.execute("UPDATE issues SET design_commit_hash = plan_commit_hash WHERE design_commit_hash IS NULL AND plan_commit_hash IS NOT NULL")
+            await conn.commit()
+        except Exception:
+            pass
         return cls(conn)
 
     async def close(self):
@@ -136,7 +163,7 @@ class Database:
 
     async def get_issues_awaiting_comment(self, repo_owner: str, repo_name: str) -> list[Issue]:
         cursor = await self._conn.execute(
-            "SELECT * FROM issues WHERE repo_owner = ? AND repo_name = ? AND phase IN ('plan_review', 'code_review', 'error')",
+            "SELECT * FROM issues WHERE repo_owner = ? AND repo_name = ? AND phase IN ('design_review', 'code_review', 'error')",
             (repo_owner, repo_name),
         )
         rows = await cursor.fetchall()
@@ -144,7 +171,7 @@ class Database:
 
     async def get_active_issues(self) -> list[Issue]:
         cursor = await self._conn.execute(
-            "SELECT * FROM issues WHERE phase IN ('planning', 'implementing')"
+            "SELECT * FROM issues WHERE phase IN ('designing', 'planning', 'implementing')"
         )
         rows = await cursor.fetchall()
         return [self._row_to_issue(r) for r in rows]
@@ -181,21 +208,37 @@ class Database:
         await self._conn.commit()
         logger.debug("Updated issue %d workspace=%s", issue_id, workspace_path)
 
-    async def set_plan_approved(self, issue_id: int, approved: bool):
+    async def set_design_approved(self, issue_id: int, approved: bool):
         await self._conn.execute(
-            "UPDATE issues SET plan_approved = ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE issues SET design_approved = ?, updated_at = datetime('now') WHERE id = ?",
             (int(approved), issue_id),
         )
         await self._conn.commit()
-        logger.debug("Set issue %d plan_approved=%s", issue_id, approved)
+        logger.debug("Set issue %d design_approved=%s", issue_id, approved)
 
-    async def set_plan_commit_hash(self, issue_id: int, commit_hash: str):
+    async def set_design_commit_hash(self, issue_id: int, commit_hash: str):
         await self._conn.execute(
-            "UPDATE issues SET plan_commit_hash = ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE issues SET design_commit_hash = ?, updated_at = datetime('now') WHERE id = ?",
             (commit_hash, issue_id),
         )
         await self._conn.commit()
-        logger.debug("Set issue %d plan_commit_hash=%s", issue_id, commit_hash)
+        logger.debug("Set issue %d design_commit_hash=%s", issue_id, commit_hash)
+
+    async def set_plan_path(self, issue_id: int, plan_path: str):
+        await self._conn.execute(
+            "UPDATE issues SET plan_path = ?, updated_at = datetime('now') WHERE id = ?",
+            (plan_path, issue_id),
+        )
+        await self._conn.commit()
+        logger.debug("Set issue %d plan_path=%s", issue_id, plan_path)
+
+    async def clear_plan_path(self, issue_id: int):
+        await self._conn.execute(
+            "UPDATE issues SET plan_path = NULL, updated_at = datetime('now') WHERE id = ?",
+            (issue_id,),
+        )
+        await self._conn.commit()
+        logger.debug("Cleared issue %d plan_path", issue_id)
 
     async def update_issue_error(self, issue_id: int, error_message: str):
         await self._conn.execute(
@@ -231,8 +274,8 @@ class Database:
 
     async def clear_issue_for_reopen(self, issue_id: int):
         await self._conn.execute(
-            """UPDATE issues SET pr_number = NULL, branch_name = NULL, plan_commit_hash = NULL,
-               workspace_path = NULL, last_comment_id = 0, last_review_id = 0,
+            """UPDATE issues SET pr_number = NULL, branch_name = NULL, design_commit_hash = NULL,
+               plan_path = NULL, workspace_path = NULL, last_comment_id = 0, last_review_id = 0,
                issue_closed_seen = 0, last_issue_comment_id = 0, updated_at = datetime('now')
                WHERE id = ?""",
             (issue_id,),
@@ -389,8 +432,9 @@ class Database:
             id=row["id"], repo_owner=row["repo_owner"], repo_name=row["repo_name"],
             issue_number=row["issue_number"], title=row["title"], body=row["body"],
             phase=row["phase"], branch_name=row["branch_name"], pr_number=row["pr_number"],
-            workspace_path=row["workspace_path"], plan_approved=bool(row["plan_approved"]),
-            plan_commit_hash=row["plan_commit_hash"], last_comment_id=row["last_comment_id"],
+            workspace_path=row["workspace_path"], design_approved=bool(row["design_approved"]),
+            design_commit_hash=row["design_commit_hash"], plan_path=row["plan_path"],
+            last_comment_id=row["last_comment_id"],
             last_review_id=row["last_review_id"],
             issue_closed_seen=bool(row["issue_closed_seen"]),
             last_issue_comment_id=row["last_issue_comment_id"],
