@@ -139,14 +139,44 @@ def test_review_user_prompt_plan_review():
         comment="Looks good!", context="plan_review", issue_title="Add auth",
     )
     assert "Looks good!" in prompt
-    assert "back_to_planning" not in prompt  # Not valid for plan_review
+    assert "back_to_design" not in prompt  # Not valid for plan_review
 
 
 def test_review_user_prompt_code_review():
     prompt = build_review_user_prompt(
-        comment="Go back to planning", context="code_review", issue_title="Add auth",
+        comment="Go back to design", context="code_review", issue_title="Add auth",
     )
-    assert "back_to_planning" in prompt  # Valid for code_review
+    assert "back_to_design" in prompt  # Valid for code_review
+
+
+def test_review_system_prompt_supports_design_review_context():
+    prompt = build_review_system_prompt()
+    assert "design_review" in prompt or "design review" in prompt.lower()
+
+
+def test_review_user_prompt_design_review():
+    prompt = build_review_user_prompt(
+        comment="Looks good", context="design_review", issue_title="Add auth",
+    )
+    assert "design_review" in prompt
+    assert "approve" in prompt
+
+
+def test_review_user_prompt_design_review_valid_intents():
+    prompt = build_review_user_prompt(
+        comment="test", context="design_review", issue_title="t",
+    )
+    assert "approve" in prompt
+    assert "revise" in prompt
+    assert "question" in prompt
+    assert "back_to_design" not in prompt
+
+
+def test_review_user_prompt_code_review_includes_back_to_design():
+    prompt = build_review_user_prompt(
+        comment="test", context="code_review", issue_title="t",
+    )
+    assert "back_to_design" in prompt
 
 
 # ── Sub-agent prompts ──────────────────────────────────────────────────
