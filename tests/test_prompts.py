@@ -41,22 +41,31 @@ def test_planning_system_prompt_contains_key_instructions():
     assert "codebase-explorer" in prompt
 
 
-def test_planning_user_prompt_new_issue():
+def test_planning_system_prompt_references_design_doc():
+    prompt = build_planning_system_prompt()
+    assert "design" in prompt.lower()
+    assert "plan-reviewer" in prompt or "plan_reviewer" in prompt
+    assert "bite-sized" in prompt.lower() or "single action" in prompt.lower()
+
+
+def test_planning_user_prompt_includes_design_content():
     prompt = build_planning_user_prompt(
         issue_number=42, issue_title="Add auth", issue_body="Need OAuth2",
+        design_content="## Design\nUse token-based auth",
+    )
+    assert "Use token-based auth" in prompt
+    assert "#42" in prompt
+
+
+def test_planning_user_prompt_includes_issue_details():
+    prompt = build_planning_user_prompt(
+        issue_number=42, issue_title="Add auth", issue_body="Need OAuth2",
+        design_content="## Design\nSome design",
     )
     assert "42" in prompt
     assert "Add auth" in prompt
     assert "OAuth2" in prompt
-
-
-def test_planning_user_prompt_revision():
-    prompt = build_planning_user_prompt(
-        issue_number=42, issue_title="Add auth", issue_body="Need OAuth2",
-        existing_plan="## Old plan", feedback="Change the approach",
-    )
-    assert "Old plan" in prompt
-    assert "Change the approach" in prompt
+    assert "issue-42-plan.md" in prompt
 
 
 def test_implementation_system_prompt_contains_key_instructions():
