@@ -68,9 +68,9 @@ async def test_poll_ignores_already_tracked_issue(poller, db, mock_github):
 
 
 async def test_poll_detects_new_pr_comments(poller, db, mock_github):
-    # Create issue in plan_review phase
+    # Create issue in code_review phase
     issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "code_review")
     await db.update_issue_pr(issue_id, 10)
 
     mock_github.list_issues.return_value = [
@@ -87,7 +87,7 @@ async def test_poll_detects_new_pr_comments(poller, db, mock_github):
 
 async def test_poll_filters_agent_own_comments(poller, db, mock_github):
     issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "code_review")
     await db.update_issue_pr(issue_id, 10)
 
     mock_github.list_issues.return_value = [
@@ -104,7 +104,7 @@ async def test_poll_filters_agent_own_comments(poller, db, mock_github):
 
 async def test_poll_detects_new_pr_reviews(poller, db, mock_github):
     issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "code_review")
     await db.update_issue_pr(issue_id, 10)
 
     mock_github.list_issues.return_value = [
@@ -132,7 +132,7 @@ async def test_poll_detects_new_pr_reviews(poller, db, mock_github):
 
 async def test_poll_review_with_only_inline_comments(poller, db, mock_github):
     issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "code_review")
     await db.update_issue_pr(issue_id, 10)
 
     mock_github.list_issues.return_value = [
@@ -159,7 +159,7 @@ async def test_poll_review_with_only_inline_comments(poller, db, mock_github):
 
 async def test_poll_filters_dismissed_reviews(poller, db, mock_github):
     issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "code_review")
     await db.update_issue_pr(issue_id, 10)
 
     mock_github.list_issues.return_value = [
@@ -180,7 +180,7 @@ async def test_poll_filters_dismissed_reviews(poller, db, mock_github):
 
 async def test_poll_filters_non_allowlisted_review_author(poller, db, mock_github):
     issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "code_review")
     await db.update_issue_pr(issue_id, 10)
 
     mock_github.list_issues.return_value = [
@@ -201,7 +201,7 @@ async def test_poll_filters_non_allowlisted_review_author(poller, db, mock_githu
 
 async def test_poll_updates_last_review_id(poller, db, mock_github):
     issue_id = await db.create_issue("owner", "repo", {"number": 1, "title": "T", "body": ""})
-    await db.update_issue_phase(issue_id, "plan_review")
+    await db.update_issue_phase(issue_id, "code_review")
     await db.update_issue_pr(issue_id, 10)
 
     mock_github.list_issues.return_value = [
@@ -309,6 +309,68 @@ async def test_poll_reopen_filters_non_allowlisted_comments(poller, db, mock_git
 
     events = await db.get_unprocessed_events()
     assert len(events) == 0
+
+
+async def test_polls_issue_comments_for_design_review(poller, db, mock_github):
+    """Design review issues poll issue comments (not PR comments) since no PR exists yet."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 42, "title": "Add feature", "body": "Details"})
+    await db.update_issue_phase(issue_id, "design_review")
+
+    mock_github.list_issues.return_value = [
+        {"number": 42, "title": "Add feature", "body": "Details", "author": {"login": "testuser"}}
+    ]
+    mock_github.get_pr_comments.return_value = [
+        {"id": 100, "body": "Looks good", "author": "testuser", "created_at": "2026-01-01"}
+    ]
+
+    await poller.poll_once()
+
+    events = await db.get_unprocessed_events()
+    comment_events = [e for e in events if e.event_type == "new_comment"]
+    assert len(comment_events) == 1
+
+    # Verify last_issue_comment_id was updated (not last_comment_id)
+    issue = await db.get_issue("owner", "repo", 42)
+    assert issue.last_issue_comment_id == 100
+
+
+async def test_design_review_filters_non_allowlisted_comments(poller, db, mock_github):
+    """Design review should filter out comments from non-allowlisted users."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 42, "title": "Add feature", "body": "Details"})
+    await db.update_issue_phase(issue_id, "design_review")
+
+    mock_github.list_issues.return_value = [
+        {"number": 42, "title": "Add feature", "body": "Details", "author": {"login": "testuser"}}
+    ]
+    mock_github.get_pr_comments.return_value = [
+        {"id": 100, "body": "Random comment", "author": "stranger", "created_at": "2026-01-01"}
+    ]
+
+    await poller.poll_once()
+
+    events = await db.get_unprocessed_events()
+    comment_events = [e for e in events if e.event_type == "new_comment"]
+    assert len(comment_events) == 0
+
+
+async def test_design_review_skips_already_seen_comments(poller, db, mock_github):
+    """Design review should not re-create events for already-seen comments."""
+    issue_id = await db.create_issue("owner", "repo", {"number": 42, "title": "Add feature", "body": "Details"})
+    await db.update_issue_phase(issue_id, "design_review")
+    await db.update_last_issue_comment_id(issue_id, 100)
+
+    mock_github.list_issues.return_value = [
+        {"number": 42, "title": "Add feature", "body": "Details", "author": {"login": "testuser"}}
+    ]
+    mock_github.get_pr_comments.return_value = [
+        {"id": 100, "body": "Old comment", "author": "testuser", "created_at": "2026-01-01"}
+    ]
+
+    await poller.poll_once()
+
+    events = await db.get_unprocessed_events()
+    comment_events = [e for e in events if e.event_type == "new_comment"]
+    assert len(comment_events) == 0
 
 
 async def test_poll_skips_error_issue_not_closed(poller, db, mock_github):
