@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 def build_implementation_system_prompt() -> str:
     return """You are a senior developer implementing a plan using subagents.
 

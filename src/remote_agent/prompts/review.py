@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 def build_review_system_prompt() -> str:
     return """You are interpreting a human's comment on a pull request.
 
