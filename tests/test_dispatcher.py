@@ -184,14 +184,14 @@ async def test_design_review_comment_routes_correctly(deps, dispatcher):
     assert target == "design_review"
 
 
-async def test_planning_auto_transitions_to_implementing(deps, dispatcher):
-    """revision_requested event with issue in 'planning' -> target is 'implementing'."""
+async def test_planning_revision_routes_to_planning(deps, dispatcher):
+    """revision_requested event with issue in 'planning' -> target is 'planning'."""
     issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=1,
                   title="T", body="", phase="planning", design_approved=True)
     event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
 
     target = dispatcher._determine_target_phase(issue, event)
-    assert target == "implementing"
+    assert target == "planning"
 
 
 async def test_reopen_routes_to_designing(deps, dispatcher):

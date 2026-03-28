@@ -159,7 +159,7 @@ class Dispatcher:
             if issue.phase in ("designing", "design_review"):
                 return "designing"
             if issue.phase == "planning":
-                return "implementing"
+                return "planning"
             if issue.phase in ("implementing", "code_review"):
                 return "implementing" if issue.design_approved else "designing"
             return "designing"
