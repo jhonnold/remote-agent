@@ -45,7 +45,7 @@ class AgentConfig:
     planning_model: str = "opus"
     implementation_model: str = "sonnet"
     review_model: str = "sonnet"
-    orchestrator_model: str = "haiku"
+    orchestrator_model: str = "sonnet"
     max_turns: int = 200
     max_budget_usd: float = 10.0
     daily_budget_usd: float = 50.0

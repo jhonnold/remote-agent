@@ -139,3 +139,9 @@ agent:
 """)
     config = load_config(str(config_file))
     assert config.auto_update.enabled is False
+
+
+def test_agent_config_default_orchestrator_model_is_sonnet():
+    from remote_agent.config import AgentConfig
+    config = AgentConfig()
+    assert config.orchestrator_model == "sonnet"
