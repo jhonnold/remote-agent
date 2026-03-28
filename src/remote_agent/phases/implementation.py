@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from remote_agent.commit_message import extract_commit_message, build_commit_message
 from remote_agent.models import Issue, Event, PhaseResult
 from remote_agent.db import Database
 from remote_agent.github import GitHubService
@@ -41,9 +42,10 @@ class ImplementationHandler:
             return PhaseResult(next_phase="error", error_message="Plan file not found at plan_path")
         plan_content = plan_file.read_text()
 
-        feedback = event.payload.get("body") if event.event_type in ("revision_requested", "new_comment") else None
+        feedback = event.payload.get("body")
+        is_revision = bool(feedback)
 
-        await self.agent_service.run_implementation(
+        result = await self.agent_service.run_implementation(
             plan_content=plan_content,
             design_content=design_content,
             issue_title=issue.title,
@@ -53,9 +55,11 @@ class ImplementationHandler:
             feedback=feedback,
         )
 
-        commit_msg = f"feat: implement plan for issue #{issue.issue_number}"
-        if feedback:
-            commit_msg = f"fix: address review feedback for issue #{issue.issue_number}"
+        extracted = extract_commit_message(result.result_text)
+        commit_msg = build_commit_message(
+            extracted, issue.issue_number, issue.title,
+            closes=True, is_revision=is_revision,
+        )
         await self.workspace_mgr.commit_and_push(workspace, issue.branch_name, commit_msg)
 
         # Create PR if none exists, otherwise mark it ready (revision from code_review)
@@ -63,7 +67,7 @@ class ImplementationHandler:
             pr_number = await self.github.create_pr(
                 issue.repo_owner, issue.repo_name,
                 title=f"[Agent] {issue.title}",
-                body=f"Implementation for #{issue.issue_number}",
+                body=f"Implementation for #{issue.issue_number}\n\nCloses #{issue.issue_number}",
                 branch=issue.branch_name,
                 draft=False,
             )

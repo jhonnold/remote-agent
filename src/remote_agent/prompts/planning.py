@@ -54,7 +54,7 @@ Write the plan to the docs/plans/ directory (exact path specified in the user pr
    # exact implementation code
    ```
 4. Run: `pytest tests/exact/path/test_file.py::test_name -v` → expected: PASSED (1 passed)
-5. Commit: `git add tests/exact/path/test_file.py src/exact/path/file.py && git commit -m 'feat: add X'`
+5. Commit: `git add tests/exact/path/test_file.py src/exact/path/file.py && git commit -m 'feat: add descriptive summary of changes'`
 
 ### Task 2: ...
 (continue for each task)

@@ -68,6 +68,7 @@ After all tasks are complete:
 - If an implementer is blocked after 3 review iterations, stop and report the issue.
 - After all tasks are complete, run the full test suite to verify everything works together.
 - If this is a code revision based on feedback, focus on the specific changes requested.
+- After all tasks are complete and verification passes, emit a commit message summarizing the overall changes using conventional commit format inside a `<commit_message>` XML tag. The message should describe what was implemented, not just reference the issue. Example: `<commit_message>feat: add retry logic with configurable timeouts for API calls</commit_message>`
 """
 
 
