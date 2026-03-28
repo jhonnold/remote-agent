@@ -21,7 +21,86 @@ def impl_issue():
     return Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
                  title="Add auth", body="", phase="implementing",
                  pr_number=10, branch_name="agent/issue-42",
-                 workspace_path="/tmp/ws")
+                 workspace_path="/tmp/ws",
+                 plan_path="/tmp/.plans/issue-42-plan.md")
+
+
+def _patch_path(monkeypatch, file_contents: dict[str, str] | None = None):
+    """Patch Path.exists and Path.read_text to use a dict of path->content."""
+    contents = file_contents or {}
+    monkeypatch.setattr("pathlib.Path.exists", lambda self: True)
+    monkeypatch.setattr("pathlib.Path.read_text", lambda self, **kw: contents.get(str(self), ""))
+
+
+async def test_implementation_reads_design_and_plan(handler, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="Need OAuth2", phase="implementing",
+                  branch_name="agent/issue-42",
+                  plan_path="/tmp/.plans/issue-42-plan.md")
+    event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["github"].create_pr.return_value = 99
+    deps["agent_service"].run_implementation.return_value = AgentResult(
+        success=True, session_id="s", cost_usd=2.0, input_tokens=500, output_tokens=1000,
+    )
+    with pytest.MonkeyPatch.context() as m:
+        _patch_path(m, {
+            "/tmp/ws/docs/plans/issue-42-design.md": "## Design content",
+            "/tmp/.plans/issue-42-plan.md": "## Plan content",
+        })
+        result = await handler.handle(issue, event)
+
+    assert result.next_phase == "code_review"
+    call_kwargs = deps["agent_service"].run_implementation.call_args.kwargs
+    assert call_kwargs["design_content"] == "## Design content"
+    assert call_kwargs["plan_content"] == "## Plan content"
+    assert call_kwargs["issue_body"] == "Need OAuth2"
+
+
+async def test_implementation_creates_pr_when_none_exists(handler, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="Need OAuth2", phase="implementing",
+                  branch_name="agent/issue-42",
+                  plan_path="/tmp/.plans/issue-42-plan.md")
+    event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["github"].create_pr.return_value = 55
+    deps["agent_service"].run_implementation.return_value = AgentResult(
+        success=True, session_id="s", cost_usd=2.0, input_tokens=500, output_tokens=1000,
+    )
+    with pytest.MonkeyPatch.context() as m:
+        _patch_path(m)
+        result = await handler.handle(issue, event)
+
+    assert result.next_phase == "code_review"
+    deps["github"].create_pr.assert_called_once_with(
+        "o", "r",
+        title="[Agent] Add auth",
+        body="Implementation for #42",
+        branch="agent/issue-42",
+        draft=False,
+    )
+    deps["db"].update_issue_pr.assert_called_once_with(1, 55)
+    deps["github"].mark_pr_ready.assert_not_called()
+
+
+async def test_implementation_skips_pr_creation_when_exists(handler, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="", phase="implementing",
+                  pr_number=10, branch_name="agent/issue-42",
+                  plan_path="/tmp/.plans/issue-42-plan.md")
+    event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+    deps["agent_service"].run_implementation.return_value = AgentResult(
+        success=True, session_id="s", cost_usd=2.0, input_tokens=500, output_tokens=1000,
+    )
+    with pytest.MonkeyPatch.context() as m:
+        _patch_path(m)
+        result = await handler.handle(issue, event)
+
+    assert result.next_phase == "code_review"
+    deps["github"].create_pr.assert_not_called()
+    deps["github"].mark_pr_ready.assert_called_once_with("o", "r", 10)
 
 
 async def test_implementation_publishes_pr(handler, deps, impl_issue):
@@ -30,10 +109,8 @@ async def test_implementation_publishes_pr(handler, deps, impl_issue):
     deps["agent_service"].run_implementation.return_value = AgentResult(
         success=True, session_id="s", cost_usd=2.0, input_tokens=500, output_tokens=1000,
     )
-    # Mock reading the plan file
     with pytest.MonkeyPatch.context() as m:
-        m.setattr("pathlib.Path.exists", lambda self: True)
-        m.setattr("pathlib.Path.read_text", lambda self: "## Plan content")
+        _patch_path(m)
         result = await handler.handle(impl_issue, event)
 
     assert result.next_phase == "code_review"
@@ -47,7 +124,8 @@ async def test_implementation_audit_records(deps):
 
     issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
                   title="Add auth", body="", phase="implementing",
-                  pr_number=10, branch_name="agent/issue-42")
+                  pr_number=10, branch_name="agent/issue-42",
+                  plan_path="/tmp/.plans/issue-42-plan.md")
     event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
     deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
     deps["agent_service"].run_implementation.return_value = AgentResult(
@@ -55,11 +133,23 @@ async def test_implementation_audit_records(deps):
     )
 
     with pytest.MonkeyPatch.context() as m:
-        m.setattr("pathlib.Path.exists", lambda self: True)
-        m.setattr("pathlib.Path.read_text", lambda self: "## Plan")
+        _patch_path(m)
         result = await handler.handle(issue, event)
 
     assert result.next_phase == "code_review"
     assert audit.log.call_count >= 1
     categories = [c.args[0] for c in audit.log.call_args_list]
     assert "phase_transition" in categories
+
+
+async def test_implementation_returns_error_when_plan_path_none(handler, deps):
+    issue = Issue(id=1, repo_owner="o", repo_name="r", issue_number=42,
+                  title="Add auth", body="", phase="implementing",
+                  branch_name="agent/issue-42",
+                  plan_path=None)
+    event = Event(id=1, issue_id=1, event_type="revision_requested", payload={})
+    deps["workspace_mgr"].ensure_workspace.return_value = "/tmp/ws"
+
+    result = await handler.handle(issue, event)
+    assert result.next_phase == "error"
+    assert "plan_path" in result.error_message.lower()

@@ -29,16 +29,25 @@ class ImplementationHandler:
         )
         await self.workspace_mgr.ensure_branch(workspace, issue.branch_name)
 
-        plan_path = Path(workspace) / "docs" / "plans" / f"issue-{issue.issue_number}-plan.md"
-        if not plan_path.exists():
-            return PhaseResult(next_phase="error", error_message="Plan file not found")
-        plan_content = plan_path.read_text()
+        # Read design doc from the branch
+        design_path = Path(workspace) / "docs" / "plans" / f"issue-{issue.issue_number}-design.md"
+        design_content = design_path.read_text() if design_path.exists() else ""
+
+        # Read plan from temp storage via issue.plan_path
+        if not issue.plan_path:
+            return PhaseResult(next_phase="error", error_message="No plan_path set on issue")
+        plan_file = Path(issue.plan_path)
+        if not plan_file.exists():
+            return PhaseResult(next_phase="error", error_message="Plan file not found at plan_path")
+        plan_content = plan_file.read_text()
 
         feedback = event.payload.get("body") if event.event_type in ("revision_requested", "new_comment") else None
 
         await self.agent_service.run_implementation(
             plan_content=plan_content,
+            design_content=design_content,
             issue_title=issue.title,
+            issue_body=issue.body or "",
             cwd=workspace,
             issue_id=issue.id,
             feedback=feedback,
@@ -49,10 +58,22 @@ class ImplementationHandler:
             commit_msg = f"fix: address review feedback for issue #{issue.issue_number}"
         await self.workspace_mgr.commit_and_push(workspace, issue.branch_name, commit_msg)
 
-        await self.github.mark_pr_ready(issue.repo_owner, issue.repo_name, issue.pr_number)
+        # Create PR if none exists, otherwise mark it ready (revision from code_review)
+        if issue.pr_number is None:
+            pr_number = await self.github.create_pr(
+                issue.repo_owner, issue.repo_name,
+                title=f"[Agent] {issue.title}",
+                body=f"Implementation for #{issue.issue_number}",
+                branch=issue.branch_name,
+                draft=False,
+            )
+            await self.db.update_issue_pr(issue.id, pr_number)
+        else:
+            pr_number = issue.pr_number
+            await self.github.mark_pr_ready(issue.repo_owner, issue.repo_name, pr_number)
 
         await self.github.post_comment(
-            issue.repo_owner, issue.repo_name, issue.pr_number,
+            issue.repo_owner, issue.repo_name, pr_number,
             "Implementation complete. Please review the code and comment with feedback.",
         )
 
