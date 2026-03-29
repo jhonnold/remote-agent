@@ -83,10 +83,10 @@ def test_implementation_system_prompt_references_issue_advocate():
     assert "scene-setting" in prompt.lower() or "scene setting" in prompt.lower()
 
 
-def test_implementation_system_prompt_red_flags():
+def test_implementation_system_prompt_constraints():
     prompt = build_implementation_system_prompt()
-    assert "never parallelize" in prompt.lower() or "do not parallelize" in prompt.lower()
-    assert "never skip review" in prompt.lower() or "do not skip review" in prompt.lower()
+    assert "must not parallelize" in prompt.lower() or "parallelize" in prompt.lower()
+    assert "must not skip review" in prompt.lower() or "skip review" in prompt.lower()
     assert "full task text" in prompt.lower()
     assert "3 iteration" in prompt.lower() or "three iteration" in prompt.lower()
 
@@ -232,6 +232,55 @@ def test_implementer_prompt_has_self_review():
     assert "Testing" in prompt
 
 
+def test_implementer_prompt_has_role_section():
+    prompt = implementer_prompt()
+    assert "## Role" in prompt
+    assert "Implementer" in prompt
+
+
+def test_implementer_prompt_has_task_section_with_subsections():
+    prompt = implementer_prompt()
+    assert "## Task" in prompt
+    assert "### Before You Begin" in prompt
+    assert "### While You Work" in prompt
+    assert "### Self-Review" in prompt
+
+
+def test_implementer_prompt_has_format_section():
+    prompt = implementer_prompt()
+    assert "## Format" in prompt
+    assert "What I implemented" in prompt
+    assert "Tests and results" in prompt
+    assert "Files changed" in prompt
+    assert "Self-review findings" in prompt
+    assert "Concerns" in prompt
+
+
+def test_implementer_prompt_has_constraints_section():
+    prompt = implementer_prompt()
+    assert "## Constraints" in prompt
+    assert "MUST make the smallest change" in prompt
+    assert "MUST write tests alongside implementation" in prompt
+    assert "MUST NOT report known issues" in prompt
+
+
+def test_implementer_prompt_has_rfc2119_keywords():
+    prompt = implementer_prompt()
+    assert "RFC 2119" in prompt
+    assert "MUST" in prompt
+    assert "MUST NOT" in prompt
+    assert "SHOULD" in prompt
+
+
+def test_implementer_prompt_self_review_categories_have_details():
+    prompt = implementer_prompt()
+    # All four categories with their bullet details
+    assert "every requirement in the task" in prompt
+    assert "variable and function names descriptive" in prompt
+    assert "drive-by refactors" in prompt
+    assert "Do all tests pass" in prompt
+
+
 def test_spec_reviewer_prompt_adversarial():
     prompt = spec_reviewer_prompt()
     assert "Do NOT trust" in prompt or "do not trust" in prompt.lower()
@@ -247,3 +296,62 @@ def test_code_quality_reviewer_prompt():
 def test_final_reviewer_prompt():
     prompt = final_reviewer_prompt()
     assert "holistic" in prompt.lower() or "entire" in prompt.lower()
+
+
+# ── Structural tests: Role/Task/Format sections ────────────────────────
+
+import pytest
+
+
+@pytest.mark.parametrize("prompt_fn", [
+    build_designing_system_prompt,
+    build_planning_system_prompt,
+    build_implementation_system_prompt,
+    build_review_system_prompt,
+    codebase_explorer_prompt,
+    design_critic_prompt,
+    plan_reviewer_prompt,
+    implementer_prompt,
+    spec_reviewer_prompt,
+    code_quality_reviewer_prompt,
+    final_reviewer_prompt,
+])
+def test_prompt_has_role_task_format_sections(prompt_fn):
+    prompt = prompt_fn()
+    assert "## Role" in prompt
+    assert "## Task" in prompt
+    assert "## Format" in prompt
+
+
+def test_issue_advocate_prompt_has_role_task_format():
+    prompt = issue_advocate_prompt("test issue")
+    assert "## Role" in prompt
+    assert "## Task" in prompt
+    assert "## Format" in prompt
+
+
+# ── Structural tests: RFC 2119 keywords ───────────────────────────────
+
+@pytest.mark.parametrize("prompt_fn", [
+    build_designing_system_prompt,
+    build_planning_system_prompt,
+    build_implementation_system_prompt,
+    build_review_system_prompt,
+    codebase_explorer_prompt,
+    design_critic_prompt,
+    plan_reviewer_prompt,
+    implementer_prompt,
+    spec_reviewer_prompt,
+    code_quality_reviewer_prompt,
+    final_reviewer_prompt,
+])
+def test_prompt_uses_rfc2119_keywords(prompt_fn):
+    prompt = prompt_fn()
+    has_keyword = any(kw in prompt for kw in ["MUST", "SHOULD", "MAY"])
+    assert has_keyword, f"{prompt_fn.__name__} has no RFC 2119 keywords"
+
+
+def test_issue_advocate_prompt_uses_rfc2119_keywords():
+    prompt = issue_advocate_prompt("test issue")
+    has_keyword = any(kw in prompt for kw in ["MUST", "SHOULD", "MAY"])
+    assert has_keyword
