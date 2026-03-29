@@ -15,10 +15,11 @@ The eval suite introduces end-to-end prompt regression testing by running agent 
 
 **Separation from unit tests:**
 
-- A dedicated pytest marker (`eval`) registered in `pyproject.toml` under `[tool.pytest.ini_options]`: `markers = ["eval: LLM-as-judge eval tests (requires ANTHROPIC_API_KEY)"]`
-- An autouse fixture in `tests/evals/conftest.py` that skips all eval tests when `ANTHROPIC_API_KEY` is not set
-- Run command: `pytest -m eval` (explicit opt-in)
-- Regular unit tests unaffected: `pytest -m "not eval"` or plain `pytest` (evals show as `SKIPPED` without the env var)
+- A dedicated pytest marker (`eval`) registered in `pyproject.toml` under `[tool.pytest.ini_options]`: `markers = ["eval: LLM-as-judge eval tests (slow, costs money)"]`
+- A custom `--run-evals` CLI flag registered via `pytest_addoption` in `tests/evals/conftest.py`, with an autouse fixture that skips all eval tests unless the flag is passed
+- Run command: `pytest --run-evals` (explicit opt-in)
+- Regular unit tests unaffected: plain `pytest` runs only unit tests (evals show as `SKIPPED`)
+- No API key or environment variable configuration is required — the `claude-agent-sdk` automatically authenticates via the local claude-code CLI
 
 **Phase coverage:** Start with the designing phase — it has the most well-defined output structure (a design document with 5 required sections) and the most constrained prompt. Planning and implementation phases can be added as separate follow-up issues once the eval infrastructure is proven. The review/comment-classification phase is excluded since `interpret_comment()` at `src/remote_agent/agent.py:122` is pure regex and doesn't use prompts at runtime.
 
@@ -75,13 +76,21 @@ Cost per full eval suite run: up to `max_budget_usd` ($2.00) for agent generatio
 
 **Purpose:** Provide pytest fixtures for eval tests, handle skip logic, and configure the agent for eval runs.
 
-**Skip fixture (autouse):**
+**CLI flag and skip fixture:**
 ```python
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-evals", action="store_true", default=False,
+        help="Run LLM-as-judge eval tests (slow, costs money)",
+    )
+
 @pytest.fixture(autouse=True)
-def _skip_without_api_key():
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip("ANTHROPIC_API_KEY not set — skipping eval tests")
+def _skip_unless_evals(request):
+    if not request.config.getoption("--run-evals"):
+        pytest.skip("Pass --run-evals to run eval tests")
 ```
+
+No API key or environment variable is checked. The `claude-agent-sdk` authenticates automatically via the local claude-code CLI session.
 
 **Key fixtures:**
 
@@ -222,9 +231,9 @@ async def judge_output(
 ### Primary flow: Designing eval test
 
 ```
-1. Developer runs `pytest -m eval`
+1. Developer runs `pytest --run-evals`
 2. pytest discovers tests/evals/test_designing_eval.py
-3. conftest.py autouse fixture checks ANTHROPIC_API_KEY → skip if absent
+3. conftest.py autouse fixture checks --run-evals flag → skip if absent
 4. Fixtures initialize:
    a. eval_config → Config with AgentConfig(planning_model="sonnet", max_turns=50, max_budget_usd=2.0)
    b. eval_db → Database.initialize(tmp_path/"eval.db") → seed issue row via create_issue()
@@ -232,7 +241,7 @@ async def judge_output(
    d. eval_workspace → `git worktree add` of project repo → full codebase copy
 5. Test calls eval_agent_service.run_designing(cwd=eval_workspace, issue_id=1, ...)
 6. AgentService builds prompts via build_designing_system_prompt() / build_designing_user_prompt()
-7. AgentService calls claude-agent-sdk query() → SDK calls create_agent_run on eval_db
+7. AgentService calls claude-agent-sdk query() (SDK authenticates via local claude-code CLI) → SDK calls create_agent_run on eval_db
 8. Agent explores eval_workspace (real codebase), writes docs/plans/issue-99-design.md
 9. Test reads design file from Path(eval_workspace) / "docs/plans/issue-99-design.md"
 10. Test calls judge_output(artifact=design_content, rubric=DESIGNING_RUBRIC)
@@ -261,7 +270,7 @@ async def judge_output(
 
 ### Inputs and triggers
 
-- **Trigger:** Developer runs `pytest -m eval`
+- **Trigger:** Developer runs `pytest --run-evals`
 - **Inputs:** Static fixture data (sample issue constants), eval config overrides, git worktree of project repo
 
 ### Output and side effects
@@ -301,7 +310,7 @@ The eval suite is test infrastructure. It needs its own verification:
 
 ### Unit tests for the judge module (`tests/test_judge.py`)
 
-Test `judge.py` in isolation by mocking `claude-agent-sdk`'s `query()` call. These run with the regular `pytest` suite (no API key needed):
+Test `judge.py` in isolation by mocking `claude-agent-sdk`'s `query()` call. These run with the regular `pytest` suite (fast, no LLM calls):
 
 1. **Happy path** — Mock judge returning valid JSON with all scores above thresholds → `JudgeResult.passed == True`
 2. **Failure path** — Mock judge returning valid JSON with one score below threshold → `JudgeResult.passed == False`, correct `scores` populated
@@ -316,7 +325,7 @@ Test `judge.py` in isolation by mocking `claude-agent-sdk`'s `query()` call. The
 
 ### Eval tests (`tests/evals/test_designing_eval.py`)
 
-Run via `pytest -m eval`. Require `ANTHROPIC_API_KEY` and cost real money.
+Run via `pytest --run-evals`. These make real LLM calls (via the local claude-code CLI) and cost real money.
 
 1. `test_designing_produces_quality_design` — Run designing agent on sample issue against project repo worktree, judge output against designing rubric, assert all criteria pass.
 2. `test_designing_revision_produces_quality_design` — Run designing with a stub `existing_design` and `feedback` (both from fixtures, not from prior test output). Uses a fresh worktree. Verify output addresses the feedback.
@@ -324,14 +333,14 @@ Run via `pytest -m eval`. Require `ANTHROPIC_API_KEY` and cost real money.
 ### Running the suite
 
 ```bash
-# Eval tests only (requires ANTHROPIC_API_KEY)
-pytest -m eval
+# Eval tests only (slow, costs money, uses local claude-code CLI auth)
+pytest --run-evals
 
-# Unit tests only (fast, no API calls)
-pytest -m "not eval"
-
-# Everything (evals SKIPPED if no API key)
+# Unit tests only (fast, no LLM calls)
 pytest
+
+# Everything (unit tests + evals)
+pytest --run-evals
 ```
 
 ### New files summary
@@ -342,8 +351,9 @@ tests/
   test_eval_fixtures.py             # Unit tests for rubrics and fixtures
   evals/
     __init__.py
-    conftest.py                     # Autouse skip fixture, eval_config, eval_db,
-                                    # eval_agent_service, eval_workspace fixtures
+    conftest.py                     # --run-evals flag, autouse skip fixture,
+                                    # eval_config, eval_db, eval_agent_service,
+                                    # eval_workspace fixtures
     judge.py                        # judge_output(), JudgeScore, JudgeResult, JudgeParseError
     fixtures/
       __init__.py
