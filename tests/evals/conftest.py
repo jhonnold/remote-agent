@@ -22,15 +22,6 @@ from remote_agent.db import Database
 from tests.evals.fixtures.sample_issues import CACHING_ISSUE
 
 
-def pytest_addoption(parser):
-    parser.addoption(
-        "--run-evals",
-        action="store_true",
-        default=False,
-        help="Run LLM-as-judge eval tests (slow, costs money)",
-    )
-
-
 @pytest.fixture(autouse=True)
 def _skip_unless_evals(request):
     if not request.config.getoption("--run-evals"):
