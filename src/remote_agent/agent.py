@@ -226,7 +226,10 @@ class AgentService:
                 input_tokens=input_tokens, output_tokens=output_tokens,
                 error_message=str(e),
             )
-            record_query_error(repo=repo, phase=phase, model=getattr(options, "model", "unknown"))
+            # Use model_usage keys (full model names) when available, fall back to options.model
+            error_models = list(model_usage.keys()) if model_usage else [getattr(options, "model", "unknown")]
+            for m in error_models:
+                record_query_error(repo=repo, phase=phase, model=m)
             raise AgentError(str(e)) from e
 
     def _get_designing_subagents(self, issue_body: str) -> dict:

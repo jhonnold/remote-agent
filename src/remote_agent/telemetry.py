@@ -184,4 +184,5 @@ async def shutdown_telemetry() -> None:
         await _server_runner.cleanup()
         _server_runner = None
         _server_site = None
+        _initialized = False
         logger.info("Metrics server stopped")
