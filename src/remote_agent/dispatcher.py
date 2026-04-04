@@ -5,6 +5,7 @@ import contextvars
 import logging
 
 from remote_agent.logging_config import current_issue_id, current_event_id
+from remote_agent.telemetry import record_phase_transition
 
 from remote_agent.config import Config
 from remote_agent.db import Database
@@ -110,6 +111,11 @@ class Dispatcher:
         try:
             result = await handler.handle(issue, event)
             await self.db.update_issue_phase(issue.id, result.next_phase)
+            record_phase_transition(
+                repo=f"{issue.repo_owner}/{issue.repo_name}",
+                from_phase=issue.phase,
+                to_phase=result.next_phase,
+            )
             if result.error_message:
                 await self.db.update_issue_error(issue.id, result.error_message)
             # Reset budget notification on successful processing
