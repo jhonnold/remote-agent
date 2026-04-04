@@ -17,6 +17,7 @@ from remote_agent.prompts.subagents import (
     plan_reviewer_prompt, implementer_prompt, spec_reviewer_prompt,
     code_quality_reviewer_prompt, final_reviewer_prompt,
 )
+from remote_agent.telemetry import record_query_metrics, record_query_error
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,13 @@ class AgentService:
         self.config = config
         self.db = db
 
+    def _repo_label(self) -> str:
+        """Build repo label from first configured repo."""
+        if self.config.repos:
+            r = self.config.repos[0]
+            return f"{r.owner}/{r.name}"
+        return ""
+
     async def run_designing(self, *, issue_number: int, issue_title: str,
                              issue_body: str, cwd: str, issue_id: int,
                              existing_design: str | None = None,
@@ -65,7 +73,7 @@ class AgentService:
             cwd=cwd,
             agents=self._get_designing_subagents(issue_body),
         )
-        return await self._run_query(user_prompt, options, issue_id, phase="designing", allow_resume=True)
+        return await self._run_query(user_prompt, options, issue_id, phase="designing", allow_resume=True, repo=self._repo_label())
 
     async def run_planning(self, *, issue_number: int, issue_title: str,
                             issue_body: str, design_content: str,
@@ -88,7 +96,7 @@ class AgentService:
             cwd=cwd,
             agents=self._get_planning_subagents(),
         )
-        return await self._run_query(user_prompt, options, issue_id, phase="planning", allow_resume=True)
+        return await self._run_query(user_prompt, options, issue_id, phase="planning", allow_resume=True, repo=self._repo_label())
 
     async def run_implementation(self, *, plan_content: str, issue_title: str,
                                   issue_body: str = "", design_content: str = "",
@@ -113,7 +121,7 @@ class AgentService:
             cwd=cwd,
             agents=self._get_implementation_subagents(issue_body),
         )
-        return await self._run_query(user_prompt, options, issue_id, phase="implementing", allow_resume=True)
+        return await self._run_query(user_prompt, options, issue_id, phase="implementing", allow_resume=True, repo=self._repo_label())
 
     async def interpret_comment(self, *, comment: str, context: str,
                                  issue_title: str, issue_id: int,
@@ -152,11 +160,11 @@ class AgentService:
             max_budget_usd=1.0,
         )
 
-        result = await self._run_query(user_prompt, options, issue_id, phase=f"{context}_question")
+        result = await self._run_query(user_prompt, options, issue_id, phase=f"{context}_question", repo=self._repo_label())
         return result.result_text or ""
 
     async def _run_query(self, prompt: str, options, issue_id: int, phase: str,
-                          allow_resume: bool = False) -> AgentResult:
+                          allow_resume: bool = False, repo: str = "") -> AgentResult:
         from claude_agent_sdk import query, ResultMessage
 
         logger.info("Starting %s query for issue %d, model=%s", phase, issue_id, getattr(options, "model", "unknown"))
@@ -175,6 +183,9 @@ class AgentService:
         cost = 0.0
         input_tokens = 0
         output_tokens = 0
+        model_usage = None
+        duration_ms = 0
+        duration_api_ms = 0
 
         try:
             logger.debug("Agent prompt for issue %d phase=%s:\n%s", issue_id, phase, prompt)
@@ -187,10 +198,17 @@ class AgentService:
                     usage = message.usage or {}
                     input_tokens = usage.get("input_tokens", 0)
                     output_tokens = usage.get("output_tokens", 0)
+                    model_usage = message.model_usage
+                    duration_ms = message.duration_ms
+                    duration_api_ms = message.duration_api_ms
                     logger.debug("Agent result for issue %d phase=%s:\n%s", issue_id, phase, result_text)
 
             logger.info("Completed %s query for issue %d, cost=$%.4f, tokens=%d+%d, session=%s",
                         phase, issue_id, cost, input_tokens, output_tokens, session_id)
+            record_query_metrics(
+                repo=repo, phase=phase, model_usage=model_usage,
+                duration_ms=duration_ms, duration_api_ms=duration_api_ms,
+            )
 
             await self.db.complete_agent_run(
                 run_id, session_id=session_id, result="success",
@@ -208,6 +226,7 @@ class AgentService:
                 input_tokens=input_tokens, output_tokens=output_tokens,
                 error_message=str(e),
             )
+            record_query_error(repo=repo, phase=phase, model=getattr(options, "model", "unknown"))
             raise AgentError(str(e)) from e
 
     def _get_designing_subagents(self, issue_body: str) -> dict:
