@@ -1,3 +1,4 @@
+from __future__ import annotations
 from unittest.mock import patch, MagicMock
 from remote_agent.config import TelemetryConfig
 from remote_agent.telemetry import setup_telemetry
