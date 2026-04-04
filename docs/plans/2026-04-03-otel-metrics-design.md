@@ -11,7 +11,7 @@ Add OpenTelemetry metrics export to the remote-agent service, focused on Claude 
 
 - **Metrics only** (no tracing or log export through OTel for now)
 - **OTLP export to external collector** (no in-process HTTP metrics endpoint)
-- **Community instrumentor** (`opentelemetry-instrumentation-claude-agent-sdk`) for automatic `query()` instrumentation
+- **Community instrumentor** (`opentelemetry-instrumentation-anthropic`) for automatic `query()` instrumentation
 - **Config docs only** for collector setup (no docker-compose included)
 - **Opt-in** via config toggle (disabled by default)
 
@@ -21,7 +21,7 @@ Add OpenTelemetry metrics export to the remote-agent service, focused on Claude 
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-grpc
-opentelemetry-instrumentation-claude-agent-sdk
+opentelemetry-instrumentation-anthropic
 ```
 
 ## Architecture
@@ -31,7 +31,7 @@ main.py startup
   └── setup_telemetry(config)
         ├── if disabled: no-op return
         ├── configure TracerProvider with OTLP exporter
-        └── ClaudeAgentSdkInstrumentor().instrument()
+        └── AnthropicInstrumentor().instrument()
 
 agent.py query() calls  ──(auto-patched)──>  OTel spans  ──>  OTLP gRPC  ──>  Collector  ──>  Prometheus
 ```
@@ -41,7 +41,7 @@ agent.py query() calls  ──(auto-patched)──>  OTel spans  ──>  OTLP g
 Responsibilities:
 1. Read telemetry config (endpoint, service name, enabled flag)
 2. Configure `TracerProvider` with `OTLPSpanExporter`
-3. Call `ClaudeAgentSdkInstrumentor().instrument()`
+3. Call `AnthropicInstrumentor().instrument()`
 4. No-op when telemetry is disabled
 
 ### Config Addition
