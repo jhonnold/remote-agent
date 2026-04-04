@@ -57,6 +57,13 @@ class AutoUpdateConfig:
 
 
 @dataclass
+class TelemetryConfig:
+    enabled: bool = False
+    otlp_endpoint: str = "http://localhost:4317"
+    service_name: str = "remote-agent"
+
+
+@dataclass
 class Config:
     repos: list[RepoConfig]
     users: list[str]
@@ -67,6 +74,7 @@ class Config:
     agent: AgentConfig
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     auto_update: AutoUpdateConfig = field(default_factory=AutoUpdateConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 def load_config(config_path: str) -> Config:
@@ -115,4 +123,5 @@ def load_config(config_path: str) -> Config:
         agent=AgentConfig(**raw.get("agent", {})),
         logging=LoggingConfig(**logging_raw),
         auto_update=AutoUpdateConfig(**raw.get("auto_update", {})),
+        telemetry=TelemetryConfig(**raw.get("telemetry", {})),
     )
