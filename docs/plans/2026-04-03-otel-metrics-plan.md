@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Wire up `opentelemetry-instrumentation-claude-agent-sdk` so every `query()` call automatically emits OTel spans exported via OTLP to an external collector.
+**Goal:** Wire up `opentelemetry-instrumentation-anthropic` so every `query()` call automatically emits OTel spans exported via OTLP to an external collector.
 
-**Architecture:** A new `telemetry.py` module configures a `TracerProvider` with an OTLP exporter and calls `ClaudeAgentSdkInstrumentor().instrument()` at startup. Config is opt-in via a `telemetry` section in `config.yaml`. No changes to `agent.py` — the instrumentor patches `query()` automatically.
+**Architecture:** A new `telemetry.py` module configures a `TracerProvider` with an OTLP exporter and calls `AnthropicInstrumentor().instrument()` at startup. Config is opt-in via a `telemetry` section in `config.yaml`. No changes to `agent.py` — the instrumentor patches `query()` automatically.
 
-**Tech Stack:** `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc`, `opentelemetry-instrumentation-claude-agent-sdk`
+**Tech Stack:** `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-grpc`, `opentelemetry-instrumentation-anthropic`
 
 ---
 
@@ -147,7 +147,7 @@ telemetry = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
-    "opentelemetry-instrumentation-claude-agent-sdk>=0.1.0",
+    "opentelemetry-instrumentation-anthropic>=0.1.0",
 ]
 ```
 
@@ -202,7 +202,7 @@ def test_setup_telemetry_enabled_configures_provider():
         patch("remote_agent.telemetry.OTLPSpanExporter") as mock_exporter_cls,
         patch("remote_agent.telemetry.BatchSpanProcessor") as mock_bsp_cls,
         patch("remote_agent.telemetry.trace") as mock_trace,
-        patch("remote_agent.telemetry.ClaudeAgentSdkInstrumentor", return_value=mock_instrumentor) as mock_instr_cls,
+        patch("remote_agent.telemetry.AnthropicInstrumentor", return_value=mock_instrumentor) as mock_instr_cls,
         patch("remote_agent.telemetry.Resource") as mock_resource_cls,
     ):
         setup_telemetry(config)
@@ -252,7 +252,7 @@ try:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.instrumentation.claude_agent_sdk import ClaudeAgentSdkInstrumentor
+    from opentelemetry.instrumentation.claude_agent_sdk import AnthropicInstrumentor
     HAS_OTEL = True
 except ImportError:
     HAS_OTEL = False
@@ -275,7 +275,7 @@ def setup_telemetry(config: TelemetryConfig) -> None:
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
 
-    ClaudeAgentSdkInstrumentor().instrument()
+    AnthropicInstrumentor().instrument()
 
     logger.info(
         "Telemetry enabled: exporting to %s as %s",

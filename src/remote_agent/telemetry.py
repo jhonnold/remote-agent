@@ -20,8 +20,16 @@ except ImportError:
     HAS_OTEL = False
 
 
+_initialized = False
+
+
 def setup_telemetry(config: TelemetryConfig) -> None:
+    global _initialized
+
     if not config.enabled:
+        return
+
+    if _initialized:
         return
 
     if not HAS_OTEL:
@@ -38,6 +46,7 @@ def setup_telemetry(config: TelemetryConfig) -> None:
     trace.set_tracer_provider(provider)
 
     AnthropicInstrumentor().instrument()
+    _initialized = True
 
     logger.info(
         "Telemetry enabled: exporting to %s as %s",

@@ -1,12 +1,22 @@
 from __future__ import annotations
 from unittest.mock import patch, MagicMock
+import pytest
 from remote_agent.config import TelemetryConfig
 from remote_agent.telemetry import setup_telemetry
+import remote_agent.telemetry as telemetry_module
+
+
+@pytest.fixture(autouse=True)
+def reset_telemetry_state():
+    telemetry_module._initialized = False
+    yield
+    telemetry_module._initialized = False
 
 
 def test_setup_telemetry_disabled_is_noop():
     config = TelemetryConfig(enabled=False)
-    with patch("remote_agent.telemetry.TracerProvider", create=True) as mock_tp:
+    with patch("remote_agent.telemetry.HAS_OTEL", True), \
+         patch("remote_agent.telemetry.TracerProvider") as mock_tp:
         setup_telemetry(config)
         mock_tp.assert_not_called()
 

@@ -286,7 +286,7 @@ telemetry:
 """)
     with patch("remote_agent.main.Poller") as mock_poller_cls, \
          patch("remote_agent.main.Dispatcher") as mock_disp_cls, \
-         patch("remote_agent.telemetry.setup_telemetry") as mock_setup_tel:
+         patch("remote_agent.main.setup_telemetry") as mock_setup_tel:
         mock_poller_cls.return_value = AsyncMock()
         mock_disp = AsyncMock()
         mock_disp.process_events.side_effect = KeyboardInterrupt
