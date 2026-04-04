@@ -169,7 +169,7 @@ agent:
 """)
     config = load_config(str(config_file))
     assert config.telemetry.enabled is False
-    assert config.telemetry.otlp_endpoint == "http://localhost:4317"
+    assert config.telemetry.metrics_port == 9090
     assert config.telemetry.service_name == "remote-agent"
 
 
@@ -200,13 +200,24 @@ agent:
   daily_budget_usd: 50.0
 telemetry:
   enabled: true
-  otlp_endpoint: "http://collector:4317"
+  metrics_port: 9191
   service_name: "my-agent"
 """)
     config = load_config(str(config_file))
     assert config.telemetry.enabled is True
-    assert config.telemetry.otlp_endpoint == "http://collector:4317"
+    assert config.telemetry.metrics_port == 9191
     assert config.telemetry.service_name == "my-agent"
+
+
+def test_telemetry_config_metrics_port():
+    """TelemetryConfig should have metrics_port, not otlp_endpoint."""
+    from remote_agent.config import TelemetryConfig
+
+    config = TelemetryConfig()
+    assert config.metrics_port == 9090
+    assert config.service_name == "remote-agent"
+    assert config.enabled is False
+    assert not hasattr(config, "otlp_endpoint")
 
 
 def test_agent_config_default_orchestrator_model_is_sonnet():

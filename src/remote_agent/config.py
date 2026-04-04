@@ -59,7 +59,7 @@ class AutoUpdateConfig:
 @dataclass
 class TelemetryConfig:
     enabled: bool = False
-    otlp_endpoint: str = "http://localhost:4317"
+    metrics_port: int = 9090
     service_name: str = "remote-agent"
 
 
