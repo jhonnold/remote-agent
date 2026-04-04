@@ -127,7 +127,11 @@ def record_phase_transition(*, repo: str, from_phase: str, to_phase: str) -> Non
 
 async def _metrics_handler(request: web.Request) -> web.Response:
     body = generate_latest(REGISTRY)
-    return web.Response(body=body, content_type="text/plain; version=0.0.4; charset=utf-8")
+    return web.Response(
+        body=body,
+        content_type="text/plain; version=0.0.4",
+        charset="utf-8",
+    )
 
 
 def setup_telemetry(config: TelemetryConfig) -> None:
