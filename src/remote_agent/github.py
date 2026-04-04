@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 
+from remote_agent.telemetry import record_pr_created
+
 logger = logging.getLogger(__name__)
 
 from remote_agent.exceptions import GitHubError
@@ -110,7 +112,9 @@ class GitHubService:
             args.append("--draft")
         output = await self._run_gh(args)
         pr_url = output.strip()
-        return int(pr_url.rstrip("/").split("/")[-1])
+        pr_number = int(pr_url.rstrip("/").split("/")[-1])
+        record_pr_created(repo=f"{owner}/{repo}")
+        return pr_number
 
     async def mark_pr_ready(self, owner: str, repo: str, pr_number: int) -> None:
         await self._run_gh(["pr", "ready", str(pr_number), "--repo", f"{owner}/{repo}"])
