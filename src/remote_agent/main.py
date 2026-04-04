@@ -14,7 +14,7 @@ from remote_agent.poller import Poller
 from remote_agent.dispatcher import Dispatcher
 from remote_agent.audit import AuditLogger
 from remote_agent.updater import AutoUpdater
-from remote_agent.telemetry import setup_telemetry
+from remote_agent.telemetry import setup_telemetry, start_metrics_server, shutdown_telemetry
 
 logger = logging.getLogger("remote_agent")
 
@@ -56,6 +56,7 @@ async def run(config_path: str = "config.yaml"):
     setup_logging(app.config)
 
     setup_telemetry(app.config.telemetry)
+    await start_metrics_server(app.config.telemetry)
 
     logger.info("Remote agent started. Polling %d repos every %ds.",
                 len(app.config.repos), app.config.polling.interval_seconds)
@@ -84,6 +85,7 @@ async def run(config_path: str = "config.yaml"):
         if app.audit:
             app.audit.close()
         await app.db.close()
+        await shutdown_telemetry()
 
 
 def main():

@@ -281,12 +281,14 @@ agent:
   daily_budget_usd: 50.0
 telemetry:
   enabled: true
-  otlp_endpoint: "http://collector:4317"
+  metrics_port: 9999
   service_name: "test-agent"
 """)
     with patch("remote_agent.main.Poller") as mock_poller_cls, \
          patch("remote_agent.main.Dispatcher") as mock_disp_cls, \
-         patch("remote_agent.main.setup_telemetry") as mock_setup_tel:
+         patch("remote_agent.main.setup_telemetry") as mock_setup_tel, \
+         patch("remote_agent.main.start_metrics_server", new_callable=AsyncMock) as mock_start, \
+         patch("remote_agent.main.shutdown_telemetry", new_callable=AsyncMock) as mock_shutdown:
         mock_poller_cls.return_value = AsyncMock()
         mock_disp = AsyncMock()
         mock_disp.process_events.side_effect = KeyboardInterrupt
@@ -299,4 +301,6 @@ telemetry:
         mock_setup_tel.assert_called_once()
         call_arg = mock_setup_tel.call_args[0][0]
         assert call_arg.enabled is True
-        assert call_arg.otlp_endpoint == "http://collector:4317"
+        assert call_arg.metrics_port == 9999
+        mock_start.assert_called_once()
+        mock_shutdown.assert_called_once()
