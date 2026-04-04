@@ -252,3 +252,51 @@ auto_update:
 
     assert call_count == 2  # Loop continued past pull failure
     mock_updater.pull_update.assert_called_once()
+
+
+async def test_run_calls_setup_telemetry(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+repos:
+  - owner: "o"
+    name: "r"
+users:
+  - "u"
+polling:
+  interval_seconds: 1
+trigger:
+  label: "agent"
+workspace:
+  base_dir: "/tmp/ws"
+database:
+  path: "data/test.db"
+agent:
+  default_model: "sonnet"
+  planning_model: "opus"
+  implementation_model: "sonnet"
+  review_model: "sonnet"
+  orchestrator_model: "haiku"
+  max_turns: 200
+  max_budget_usd: 10.0
+  daily_budget_usd: 50.0
+telemetry:
+  enabled: true
+  otlp_endpoint: "http://collector:4317"
+  service_name: "test-agent"
+""")
+    with patch("remote_agent.main.Poller") as mock_poller_cls, \
+         patch("remote_agent.main.Dispatcher") as mock_disp_cls, \
+         patch("remote_agent.telemetry.setup_telemetry") as mock_setup_tel:
+        mock_poller_cls.return_value = AsyncMock()
+        mock_disp = AsyncMock()
+        mock_disp.process_events.side_effect = KeyboardInterrupt
+        mock_disp_cls.return_value = mock_disp
+        try:
+            await run(str(config_file))
+        except KeyboardInterrupt:
+            pass
+
+        mock_setup_tel.assert_called_once()
+        call_arg = mock_setup_tel.call_args[0][0]
+        assert call_arg.enabled is True
+        assert call_arg.otlp_endpoint == "http://collector:4317"
