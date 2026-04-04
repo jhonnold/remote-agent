@@ -1,7 +1,9 @@
+> **SUPERSEDED** by [2026-04-04-prometheus-metrics-design.md](2026-04-04-prometheus-metrics-design.md)
+
 # OTel Metrics Export via Claude Agent SDK Instrumentor
 
 **Date:** 2026-04-03
-**Status:** Approved
+**Status:** Superseded
 
 ## Goal
 
