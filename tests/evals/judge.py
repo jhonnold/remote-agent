@@ -68,8 +68,14 @@ def _build_judge_user_prompt(artifact: str, context: str = "") -> str:
 def _parse_judge_response(
     raw: str, rubric: list[Criterion]
 ) -> JudgeResult:
+    # Strip markdown code fences the LLM may wrap around the JSON
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("\n", 1)[1]  # drop opening ```json line
+        stripped = stripped.rsplit("```", 1)[0]  # drop closing ```
+
     try:
-        data = json.loads(raw)
+        data = json.loads(stripped)
     except json.JSONDecodeError:
         raise JudgeParseError(raw)
 

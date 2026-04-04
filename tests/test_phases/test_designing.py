@@ -7,12 +7,16 @@ from remote_agent.models import Issue, Event, PhaseResult
 from remote_agent.agent import AgentResult
 
 
-def _make_path_mock(exists: bool, content: str = "") -> MagicMock:
-    """Create a mock that behaves like Path(x) / "docs" / "plans" / "file.md"."""
+def _make_path_mock(exists_sequence: list[bool], content: str = "") -> MagicMock:
+    """Create a mock that behaves like Path(x) / "docs" / "plans" / "file.md".
+
+    Args:
+        exists_sequence: list of booleans for successive .exists() calls.
+        content: text returned by .read_text() when exists is True.
+    """
     final = MagicMock()
-    final.exists.return_value = exists
-    if exists:
-        final.read_text.return_value = content
+    final.exists.side_effect = exists_sequence
+    final.read_text.return_value = content
     plans = MagicMock()
     plans.__truediv__ = MagicMock(return_value=final)
     docs = MagicMock()
@@ -56,12 +60,10 @@ async def test_designing_creates_branch_and_posts_design(handler, deps, new_issu
         success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
 
-    # Path is constructed twice: once before agent (no existing design), once after (to read for comment)
-    path_mocks = [
-        _make_path_mock(exists=False),
-        _make_path_mock(exists=True, content="# Design\nSome design content"),
-    ]
-    with patch("remote_agent.phases.designing.Path", side_effect=path_mocks):
+    # Path is constructed once; design_path.exists() is called twice:
+    # once before agent (no existing design), once after (to read for comment)
+    path_mock = _make_path_mock([False, True], content="# Design\nSome design content")
+    with patch("remote_agent.phases.designing.Path", return_value=path_mock):
         result = await handler.handle(new_issue, new_issue_event)
 
     assert result.next_phase == "design_review"
@@ -93,11 +95,9 @@ async def test_designing_revision_passes_feedback(handler, deps):
         success=True, session_id="sess-2", cost_usd=0.5, input_tokens=50, output_tokens=100,
     )
 
-    path_mocks = [
-        _make_path_mock(exists=True, content="# Old Design\nPrevious content"),
-        _make_path_mock(exists=True, content="# Revised Design\nNew content"),
-    ]
-    with patch("remote_agent.phases.designing.Path", side_effect=path_mocks):
+    # Revision: exists=True both times, but read_text returns old content for the first read
+    path_mock = _make_path_mock([True, True], content="# Old Design\nPrevious content")
+    with patch("remote_agent.phases.designing.Path", return_value=path_mock):
         result = await handler.handle(issue, event)
 
     assert result.next_phase == "design_review"
@@ -125,11 +125,8 @@ async def test_designing_audit_records(deps, new_issue, new_issue_event):
         success=True, session_id="sess-1", cost_usd=1.0, input_tokens=100, output_tokens=200,
     )
 
-    path_mocks = [
-        _make_path_mock(exists=False),
-        _make_path_mock(exists=True, content="# Design\nContent"),
-    ]
-    with patch("remote_agent.phases.designing.Path", side_effect=path_mocks):
+    path_mock = _make_path_mock([False, True], content="# Design\nContent")
+    with patch("remote_agent.phases.designing.Path", return_value=path_mock):
         result = await handler.handle(new_issue, new_issue_event)
 
     assert result.next_phase == "design_review"
@@ -148,11 +145,8 @@ async def test_designing_uses_llm_commit_message(handler, deps, new_issue, new_i
         result_text="Here is the design.\n<commit_message>docs: add design for auth flow</commit_message>",
     )
 
-    path_mocks = [
-        _make_path_mock(exists=False),
-        _make_path_mock(exists=True, content="# Design\nSome design content"),
-    ]
-    with patch("remote_agent.phases.designing.Path", side_effect=path_mocks):
+    path_mock = _make_path_mock([False, True], content="# Design\nSome design content")
+    with patch("remote_agent.phases.designing.Path", return_value=path_mock):
         result = await handler.handle(new_issue, new_issue_event)
 
     deps["workspace_mgr"].commit_and_push.assert_called_once_with(
@@ -169,11 +163,8 @@ async def test_designing_falls_back_on_missing_tag(handler, deps, new_issue, new
         result_text="No tag here, just design output.",
     )
 
-    path_mocks = [
-        _make_path_mock(exists=False),
-        _make_path_mock(exists=True, content="# Design\nSome design content"),
-    ]
-    with patch("remote_agent.phases.designing.Path", side_effect=path_mocks):
+    path_mock = _make_path_mock([False, True], content="# Design\nSome design content")
+    with patch("remote_agent.phases.designing.Path", return_value=path_mock):
         result = await handler.handle(new_issue, new_issue_event)
 
     deps["workspace_mgr"].commit_and_push.assert_called_once_with(

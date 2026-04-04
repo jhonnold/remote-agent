@@ -91,6 +91,14 @@ def test_judge_system_prompt_includes_all_criteria():
         )
 
 
+def test_parse_judge_response_strips_markdown_fences():
+    rubric = [Criterion(name="Test", description="Test", min_score=3)]
+    fenced = '```json\n[{"criterion": "Test", "score": 5, "reasoning": "Good."}]\n```'
+    result = _parse_judge_response(fenced, rubric)
+    assert result.passed is True
+    assert result.scores[0].score == 5
+
+
 def test_parse_judge_response_rejects_non_list():
     rubric = [Criterion(name="Test", description="Test", min_score=3)]
     with pytest.raises(JudgeParseError):
